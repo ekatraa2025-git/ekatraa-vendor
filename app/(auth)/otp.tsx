@@ -13,6 +13,23 @@ export default function OTPScreen() {
     const inputs = useRef<TextInput[]>([]);
 
     const handleChange = (text: string, index: number) => {
+        // Handle paste of full OTP
+        if (text.length > 1) {
+            const otpArray = text.slice(0, 6).split('');
+            const newOtp = [...otp];
+            otpArray.forEach((char, i) => {
+                if (index + i < 6) {
+                    newOtp[index + i] = char;
+                }
+            });
+            setOtp(newOtp);
+
+            // Focus last filled input or last input
+            const lastIndex = Math.min(index + otpArray.length, 5);
+            inputs.current[lastIndex]?.focus();
+            return;
+        }
+
         const newOtp = [...otp];
         newOtp[index] = text;
         setOtp(newOtp);
@@ -125,11 +142,13 @@ export default function OTPScreen() {
                                 ref={(ref) => { inputs.current[index] = ref as TextInput; }}
                                 className={`w-12 h-14 border-2 rounded-xl text-center text-xl font-bold bg-surface focus:border-primary ${digit ? 'border-primary' : 'border-gray-100'}`}
                                 keyboardType="number-pad"
-                                maxLength={1}
+                                maxLength={index === 0 ? 6 : 1}
                                 value={digit}
                                 onChangeText={(text) => handleChange(text, index)}
                                 onKeyPress={(e) => handleKeyPress(e, index)}
                                 editable={!loading}
+                                textContentType={index === 0 ? "oneTimeCode" : "none"}
+                                autoComplete={index === 0 ? "sms-otp" : "off"}
                             />
                         ))}
                     </View>

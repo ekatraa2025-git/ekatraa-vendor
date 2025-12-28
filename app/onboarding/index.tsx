@@ -27,6 +27,8 @@ export default function OnboardingScreen() {
     const [fetching, setFetching] = useState(false);
     const [locationQuery, setLocationQuery] = useState('');
     const [suggestions, setSuggestions] = useState<string[]>([]);
+    const [hasServices, setHasServices] = useState(false);
+    const [serviceCount, setServiceCount] = useState(0);
 
     const [formData, setFormData] = useState({
         businessName: '',
@@ -62,6 +64,17 @@ export default function OnboardingScreen() {
                     }));
                     if (vendor.address) setLocationQuery(vendor.address);
                     if (vendor.logo_url) setProfileImage(vendor.logo_url);
+                }
+
+                // Check for existing services
+                const { count } = await supabase
+                    .from('services')
+                    .select('*', { count: 'exact', head: true })
+                    .eq('vendor_id', user.id);
+
+                if (count && count > 0) {
+                    setHasServices(true);
+                    setServiceCount(count);
                 }
             } catch (error) {
                 console.error('Error fetching initial onboarding data:', error);
@@ -146,24 +159,26 @@ export default function OnboardingScreen() {
                         phone: formData.phone,
                         address: locationQuery,
                         description: formData.description,
-                        logo_url: profileImage, // In real app, upload this first
+                        logo_url: profileImage,
                     });
 
                 if (vendorError) throw vendorError;
 
-                // 2. Create Initial Service
-                const { error: serviceError } = await supabase
-                    .from('services')
-                    .insert({
-                        vendor_id: user.id,
-                        name: formData.serviceName,
-                        category: formData.category, // Default to business category
-                        price_amount: parseFloat(formData.servicePrice),
-                        image_urls: serviceImage ? [serviceImage] : [],
-                        is_active: true
-                    } as any);
+                // 2. Create Initial Service (only if new service data is provided and no services exist)
+                if (!hasServices && formData.serviceName && formData.servicePrice) {
+                    const { error: serviceError } = await supabase
+                        .from('services')
+                        .insert({
+                            vendor_id: user.id,
+                            name: formData.serviceName,
+                            category: formData.category || 'Service',
+                            price_amount: parseFloat(formData.servicePrice),
+                            image_urls: serviceImage ? [serviceImage] : [],
+                            is_active: true
+                        } as any);
 
-                if (serviceError) throw serviceError;
+                    if (serviceError) throw serviceError;
+                }
 
                 router.replace('/(tabs)/dashboard');
             } catch (error: any) {
@@ -309,63 +324,93 @@ export default function OnboardingScreen() {
 
     const renderStep3 = () => (
         <View className="flex-1">
-            <Text className="text-2xl font-bold text-black mb-2">First Service</Text>
-            <Text className="text-accent mb-8">Add your first service to start getting bookings</Text>
+            {hasServices ? (
+                <>
+                    <Text className="text-2xl font-bold text-black mb-2">Your Services</Text>
+                    <Text className="text-accent mb-8">You have {serviceCount} service{serviceCount > 1 ? 's' : ''} listed</Text>
 
-            <TouchableOpacity
-                onPress={() => pickImage('service')}
-                className="bg-primary/5 border-2 border-dashed border-primary/20 rounded-3xl p-2 mb-8 items-center overflow-hidden"
-            >
-                {serviceImage ? (
-                    <Image source={{ uri: serviceImage }} className="w-full h-48 rounded-2xl" resizeMode="cover" />
-                ) : (
-                    <View className="py-10 items-center">
-                        <View className="w-16 h-16 bg-white border border-gray-100 rounded-2xl items-center justify-center mb-4">
-                            <Plus size={32} color="#FF6B00" />
+                    <View className="bg-green-50 border-2 border-green-200 rounded-3xl p-8 items-center mb-8">
+                        <View className="w-20 h-20 bg-green-100 rounded-full items-center justify-center mb-4">
+                            <Check size={40} color="#10B981" strokeWidth={3} />
                         </View>
-                        <Text className="text-black font-bold text-lg">Add Service Photo</Text>
-                        <Text className="text-accent text-xs mt-1">High quality photos attract 3x more bookings</Text>
+                        <Text className="text-green-900 font-bold text-xl mb-2">Services Already Added</Text>
+                        <Text className="text-green-700 text-center text-sm">
+                            You can manage your services from the Services tab
+                        </Text>
                     </View>
-                )}
-                {serviceImage && (
+
                     <TouchableOpacity
-                        onPress={() => setServiceImage(null)}
-                        className="absolute top-4 right-4 bg-black/50 p-2 rounded-full"
+                        onPress={() => router.push('/(tabs)/services')}
+                        className="bg-primary/10 border border-primary/20 rounded-2xl p-4 flex-row items-center justify-between"
                     >
-                        <X size={20} color="white" />
+                        <View className="flex-1">
+                            <Text className="text-primary font-bold text-base">Manage Services</Text>
+                            <Text className="text-accent text-xs mt-1">Add, edit, or remove your services</Text>
+                        </View>
+                        <ArrowRight size={20} color="#FF6B00" />
                     </TouchableOpacity>
-                )}
-            </TouchableOpacity>
+                </>
+            ) : (
+                <>
+                    <Text className="text-2xl font-bold text-black mb-2">First Service</Text>
+                    <Text className="text-accent mb-8">Add your first service to start getting bookings</Text>
 
-            <View className="space-y-6">
-                <View>
-                    <Text className="text-sm font-bold text-accent-dark mb-2">Service Name</Text>
-                    <TextInput
-                        placeholder="e.g. Wedding Hall Rental"
-                        placeholderTextColor="#9CA3AF"
-                        value={formData.serviceName}
-                        onChangeText={(text) => setFormData({ ...formData, serviceName: text })}
-                        className="bg-white border border-gray-200 rounded-2xl px-4 py-4 text-black font-semibold text-base"
-                        style={{ color: '#000000', minHeight: 56 }}
-                    />
-                </View>
+                    <TouchableOpacity
+                        onPress={() => pickImage('service')}
+                        className="bg-primary/5 border-2 border-dashed border-primary/20 rounded-3xl p-2 mb-8 items-center overflow-hidden"
+                    >
+                        {serviceImage ? (
+                            <Image source={{ uri: serviceImage }} className="w-full h-48 rounded-2xl" resizeMode="cover" />
+                        ) : (
+                            <View className="py-10 items-center">
+                                <View className="w-16 h-16 bg-white border border-gray-100 rounded-2xl items-center justify-center mb-4">
+                                    <Plus size={32} color="#FF6B00" />
+                                </View>
+                                <Text className="text-black font-bold text-lg">Add Service Photo</Text>
+                                <Text className="text-accent text-xs mt-1">High quality photos attract 3x more bookings</Text>
+                            </View>
+                        )}
+                        {serviceImage && (
+                            <TouchableOpacity
+                                onPress={() => setServiceImage(null)}
+                                className="absolute top-4 right-4 bg-black/50 p-2 rounded-full"
+                            >
+                                <X size={20} color="white" />
+                            </TouchableOpacity>
+                        )}
+                    </TouchableOpacity>
 
-                <View className="mt-4">
-                    <Text className="text-sm font-bold text-accent-dark mb-2">Base Price (₹)</Text>
-                    <View className="flex-row items-center bg-white border border-gray-200 rounded-2xl px-4 py-4">
-                        <Text className="text-black font-bold mr-2">₹</Text>
-                        <TextInput
-                            placeholder="e.g. 50000"
-                            placeholderTextColor="#9CA3AF"
-                            keyboardType="number-pad"
-                            value={formData.servicePrice}
-                            onChangeText={(text) => setFormData({ ...formData, servicePrice: text })}
-                            className="flex-1 text-black font-semibold text-base"
-                            style={{ color: '#000000', minHeight: 40 }}
-                        />
+                    <View className="space-y-6">
+                        <View>
+                            <Text className="text-sm font-bold text-accent-dark mb-2">Service Name</Text>
+                            <TextInput
+                                placeholder="e.g. Wedding Hall Rental"
+                                placeholderTextColor="#9CA3AF"
+                                value={formData.serviceName}
+                                onChangeText={(text) => setFormData({ ...formData, serviceName: text })}
+                                className="bg-white border border-gray-200 rounded-2xl px-4 py-4 text-black font-semibold text-base"
+                                style={{ color: '#000000', minHeight: 56 }}
+                            />
+                        </View>
+
+                        <View className="mt-4">
+                            <Text className="text-sm font-bold text-accent-dark mb-2">Base Price (₹)</Text>
+                            <View className="flex-row items-center bg-white border border-gray-200 rounded-2xl px-4 py-4">
+                                <Text className="text-black font-bold mr-2">₹</Text>
+                                <TextInput
+                                    placeholder="e.g. 50000"
+                                    placeholderTextColor="#9CA3AF"
+                                    keyboardType="number-pad"
+                                    value={formData.servicePrice}
+                                    onChangeText={(text) => setFormData({ ...formData, servicePrice: text })}
+                                    className="flex-1 text-black font-semibold text-base"
+                                    style={{ color: '#000000', minHeight: 40 }}
+                                />
+                            </View>
+                        </View>
                     </View>
-                </View>
-            </View>
+                </>
+            )}
         </View>
     );
 

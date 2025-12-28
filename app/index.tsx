@@ -8,24 +8,42 @@ const { width } = Dimensions.get('window');
 export default function SplashScreen() {
     const router = useRouter();
     const fadeAnim = useRef(new Animated.Value(0)).current;
-    const scaleAnim = useRef(new Animated.Value(0.8)).current;
+    const scaleAnim = useRef(new Animated.Value(0.3)).current;
+    const pulseAnim = useRef(new Animated.Value(1)).current;
 
     useEffect(() => {
+        // Initial fade and scale
         Animated.parallel([
             Animated.timing(fadeAnim, {
                 toValue: 1,
-                duration: 1000,
+                duration: 800,
                 useNativeDriver: true,
             }),
             Animated.spring(scaleAnim, {
                 toValue: 1,
-                friction: 4,
+                friction: 3,
+                tension: 40,
                 useNativeDriver: true,
             }),
-        ]).start();
+        ]).start(() => {
+            // After initial animation, start pulsing
+            Animated.loop(
+                Animated.sequence([
+                    Animated.timing(pulseAnim, {
+                        toValue: 1.1,
+                        duration: 800,
+                        useNativeDriver: true,
+                    }),
+                    Animated.timing(pulseAnim, {
+                        toValue: 1,
+                        duration: 800,
+                        useNativeDriver: true,
+                    }),
+                ])
+            ).start();
+        });
 
         const timer = setTimeout(() => {
-            // For now, redirect to login. Later check auth session.
             router.replace('/(auth)/login');
         }, 3000);
 
@@ -37,7 +55,9 @@ export default function SplashScreen() {
             <Animated.View
                 style={{
                     opacity: fadeAnim,
-                    transform: [{ scale: scaleAnim }]
+                    transform: [
+                        { scale: Animated.multiply(scaleAnim, pulseAnim) }
+                    ]
                 }}
                 className="items-center"
             >
@@ -46,18 +66,18 @@ export default function SplashScreen() {
                     style={{ width: width * 0.5, height: width * 0.5 }}
                     resizeMode="contain"
                 />
-                <View className="mt-8 items-center">
-                    <Text className="text-4xl font-bold text-primary tracking-widest">
-                        eKatRaa
-                    </Text>
-                    <Text className="text-secondary font-medium tracking-widest mt-1">
-                        VENDOR APP
-                    </Text>
-                    <View className="h-0.5 w-12 bg-primary mt-4 rounded-full" />
-                    <Text className="text-accent mt-4 text-sm">
-                        Coming Together
-                    </Text>
-                </View>
+            </Animated.View>
+            <Animated.View
+                style={{ opacity: fadeAnim }}
+                className="mt-8 items-center"
+            >
+                <Text className="text-3xl font-bold text-accent-dark tracking-wider">
+                    Vendor App
+                </Text>
+                <View className="h-0.5 w-16 bg-primary mt-4 rounded-full" />
+                <Text className="text-accent mt-4 text-sm font-medium">
+                    Coming Together
+                </Text>
             </Animated.View>
         </SafeAreaView>
     );
