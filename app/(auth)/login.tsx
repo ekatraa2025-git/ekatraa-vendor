@@ -49,18 +49,23 @@ export default function LoginScreen() {
             >
                 <ScrollView contentContainerStyle={{ flexGrow: 1 }} className="px-6">
                     <View className="flex-1 justify-center py-12">
-                        <View className="items-center mb-12">
+                        <View className="items-center mb-10">
                             <Image
                                 source={require('../../assets/icon.png')}
-                                className="w-20 h-20 rounded-2xl"
+                                className="w-32 h-32 rounded-3xl"
                                 resizeMode="contain"
                             />
-                            <Text className="text-2xl font-bold text-accent-dark mt-6 text-center">
-                                Welcome to Ekatraa
-                            </Text>
-                            <Text className="text-accent text-center mt-2">
-                                Grow your business with the most trusted vendor platform
-                            </Text>
+                            <View className="mt-6 px-4">
+                                <Text className="text-accent text-center text-sm font-medium italic leading-5 mb-1">
+                                    "Celebrating Togetherness with Trust and Care"
+                                </Text>
+                                <Text className="text-accent text-center text-sm font-medium italic leading-5 mb-1">
+                                    "विश्वास और देखभाल के साथ एकजुटता का जश्न मनाना"
+                                </Text>
+                                <Text className="text-accent text-center text-sm font-medium italic leading-5">
+                                    "ଏକତ୍ରୀତ ହବା ପାଇଁ ଏକତ୍ର ହିଁ ଏକମାତ୍ର ଭରୋସା ଓ ସାହାରା"
+                                </Text>
+                            </View>
                         </View>
 
                         <View className="bg-surface p-6 rounded-3xl border border-gray-100 shadow-sm">

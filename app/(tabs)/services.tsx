@@ -14,10 +14,51 @@ export default function ServicesScreen() {
     const [isNew, setIsNew] = useState(false);
     const [updating, setUpdating] = useState(false);
     const [selectedImage, setSelectedImage] = useState<string | null>(null);
+    const [previewModalVisible, setPreviewModalVisible] = useState(false);
+    const [previewServiceData, setPreviewServiceData] = useState<any>(null);
 
     useEffect(() => {
+        console.log('[DEBUG] ServicesScreen mounted');
         fetchServices();
     }, []);
+
+    const uploadImage = async (uri: string, prefix: string = 'image') => {
+        try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) throw new Error('Not authenticated');
+
+            const fileName = `${prefix}-${Date.now()}.jpg`;
+            console.log('[DEBUG] Uploading:', fileName);
+
+            const formData = new FormData();
+            formData.append('file', {
+                uri: uri,
+                name: fileName,
+                type: 'image/jpeg',
+            } as any);
+
+            const { data, error } = await supabase.storage
+                .from('ekatraa2025')
+                .upload(fileName, formData, {
+                    contentType: 'image/jpeg'
+                });
+
+            if (error) {
+                console.error('[STORAGE ERROR DETAIL]', error);
+                throw error;
+            }
+
+            const { data: { publicUrl } } = supabase.storage
+                .from('ekatraa2025')
+                .getPublicUrl(fileName);
+
+            console.log('[DEBUG] URL:', publicUrl);
+            return publicUrl;
+        } catch (error: any) {
+            console.error('[UPLOAD CATCH]', error);
+            throw error;
+        }
+    };
 
     const fetchServices = async () => {
         try {
@@ -53,6 +94,11 @@ export default function ServicesScreen() {
         }
     };
 
+    const openPreviewModal = (service: any) => {
+        setPreviewServiceData(service);
+        setPreviewModalVisible(true);
+    };
+
     const handleSaveService = async () => {
         if (!editingService?.name || !editingService?.price_amount) {
             Alert.alert('Required Fields', 'Please enter service name and price.');
@@ -64,12 +110,18 @@ export default function ServicesScreen() {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) return;
 
+            let imageUrls = editingService.image_urls || [];
+            if (selectedImage) {
+                const uploadedUrl = await uploadImage(selectedImage, 'service');
+                imageUrls = [uploadedUrl];
+            }
+
             const serviceData = {
                 name: editingService.name,
                 price_amount: parseFloat(editingService.price_amount),
                 category: editingService.category || 'Service',
                 is_active: editingService.is_active ?? true,
-                image_urls: selectedImage ? [selectedImage] : (editingService.image_urls || []),
+                image_urls: imageUrls,
                 vendor_id: user.id
             };
 
@@ -143,6 +195,7 @@ export default function ServicesScreen() {
     const renderServiceCard = ({ item }: { item: any }) => (
         <TouchableOpacity
             activeOpacity={0.9}
+            onPress={() => openPreviewModal(item)}
             className="bg-white border border-gray-100 rounded-[32px] overflow-hidden mb-6 shadow-sm"
         >
             <View className="relative">
@@ -177,7 +230,10 @@ export default function ServicesScreen() {
                         <Text className="text-accent font-semibold ml-2">Edit</Text>
                     </TouchableOpacity>
                     <View className="w-[1px] h-6 bg-gray-100" />
-                    <TouchableOpacity className="flex-1 flex-row items-center justify-center py-2">
+                    <TouchableOpacity
+                        onPress={() => openPreviewModal(item)}
+                        className="flex-1 flex-row items-center justify-center py-2"
+                    >
                         <Eye size={18} color="#4B5563" />
                         <Text className="text-accent font-semibold ml-2">Preview</Text>
                     </TouchableOpacity>
@@ -248,6 +304,7 @@ export default function ServicesScreen() {
                 ) : null}
             />
 
+            {/* Edit Modal */}
             <Modal
                 animationType="slide"
                 transparent={true}
@@ -342,6 +399,56 @@ export default function ServicesScreen() {
                                 )}
                             </TouchableOpacity>
                         </ScrollView>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* Preview Modal */}
+            <Modal
+                animationType="fade"
+                transparent={true}
+                visible={previewModalVisible}
+                onRequestClose={() => setPreviewModalVisible(false)}
+            >
+                <View className="flex-1 justify-center items-center bg-black/70 px-6">
+                    <View className="bg-white w-full rounded-[40px] overflow-hidden shadow-2xl">
+                        <View className="relative">
+                            <Image
+                                source={{ uri: previewServiceData?.image_urls?.[0] || 'https://images.unsplash.com/photo-1555244162-803834f70033?q=80&w=400&h=300&auto=format&fit=crop' }}
+                                className="w-full h-64"
+                            />
+                            <TouchableOpacity
+                                onPress={() => setPreviewModalVisible(false)}
+                                className="absolute top-6 right-6 w-10 h-10 bg-black/50 rounded-full items-center justify-center"
+                            >
+                                <X size={20} color="white" />
+                            </TouchableOpacity>
+                        </View>
+                        <View className="p-8">
+                            <View className="flex-row justify-between items-center mb-4">
+                                <Text className="text-accent-dark font-extrabold text-2xl">{previewServiceData?.name}</Text>
+                                <Text className="text-primary font-bold text-2xl">₹{previewServiceData?.price_amount}</Text>
+                            </View>
+                            <View className="flex-row items-center mb-6">
+                                <View className="bg-primary/10 px-4 py-1.5 rounded-full mr-3">
+                                    <Text className="text-primary font-bold text-xs uppercase">{previewServiceData?.category || 'Service'}</Text>
+                                </View>
+                                <View className="flex-row items-center">
+                                    <Star size={14} color="#FF6B00" fill="#FF6B00" />
+                                    <Text className="text-accent-dark text-sm font-bold ml-1">4.8 (120 reviews)</Text>
+                                </View>
+                            </View>
+                            <Text className="text-accent text-sm leading-6 mb-8">
+                                High-quality {previewServiceData?.category?.toLowerCase() || 'service'} provided by Ekatraa verified partners.
+                                Book now to ensure availability for your special event.
+                            </Text>
+                            <TouchableOpacity
+                                onPress={() => setPreviewModalVisible(false)}
+                                className="w-full py-5 items-center justify-center bg-black rounded-3xl"
+                            >
+                                <Text className="text-white font-extrabold text-lg">Close Preview</Text>
+                            </TouchableOpacity>
+                        </View>
                     </View>
                 </View>
             </Modal>

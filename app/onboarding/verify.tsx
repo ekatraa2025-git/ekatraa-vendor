@@ -27,6 +27,42 @@ export default function VerificationScreen() {
         }
     };
 
+    const uploadImage = async (uri: string, prefix: string = 'image') => {
+        try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) throw new Error('Not authenticated');
+
+            const fileName = `${prefix}-${Date.now()}.jpg`;
+
+            const formData = new FormData();
+            formData.append('file', {
+                uri: uri,
+                name: fileName,
+                type: 'image/jpeg',
+            } as any);
+
+            const { data, error } = await supabase.storage
+                .from('ekatraa2025')
+                .upload(fileName, formData, {
+                    contentType: 'image/jpeg'
+                });
+
+            if (error) {
+                console.error('[STORAGE ERROR DETAIL]', error);
+                throw error;
+            }
+
+            const { data: { publicUrl } } = supabase.storage
+                .from('ekatraa2025')
+                .getPublicUrl(fileName);
+
+            return publicUrl;
+        } catch (error: any) {
+            console.error('[UPLOAD CATCH]', error);
+            throw error;
+        }
+    };
+
     const handleSubmit = async () => {
         if (aadhaar.length !== 12) {
             Alert.alert('Invalid Aadhaar', 'Please enter a valid 12-digit Aadhaar number.');
@@ -42,12 +78,22 @@ export default function VerificationScreen() {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) return;
 
+            let finalFrontUrl = aadhaarFront;
+            if (aadhaarFront.startsWith('file:') || aadhaarFront.startsWith('content:')) {
+                finalFrontUrl = await uploadImage(aadhaarFront, 'kyc-front');
+            }
+
+            let finalBackUrl = aadhaarBack;
+            if (aadhaarBack.startsWith('file:') || aadhaarBack.startsWith('content:')) {
+                finalBackUrl = await uploadImage(aadhaarBack, 'kyc-back');
+            }
+
             const { error } = await supabase
                 .from('vendors')
                 .update({
                     aadhaar_number: aadhaar,
-                    aadhaar_front_url: aadhaarFront,
-                    aadhaar_back_url: aadhaarBack,
+                    aadhaar_front_url: finalFrontUrl,
+                    aadhaar_back_url: finalBackUrl,
                 })
                 .eq('id', user.id);
 

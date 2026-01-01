@@ -22,6 +22,7 @@ export default function RootLayout() {
                 <Stack.Screen name="onboarding/index" />
                 <Stack.Screen name="onboarding/verify" />
                 <Stack.Screen name="(tabs)" />
+                <Stack.Screen name="settings" />
             </Stack>
         </GestureHandlerRootView>
     );

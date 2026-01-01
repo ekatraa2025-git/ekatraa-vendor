@@ -10,41 +10,8 @@ export default function OTPScreen() {
     const { phone } = useLocalSearchParams<{ phone: string }>();
     const [otp, setOtp] = useState(['', '', '', '', '', '']);
     const [loading, setLoading] = useState(false);
-    const inputs = useRef<TextInput[]>([]);
 
-    const handleChange = (text: string, index: number) => {
-        // Handle paste of full OTP
-        if (text.length > 1) {
-            const otpArray = text.slice(0, 6).split('');
-            const newOtp = [...otp];
-            otpArray.forEach((char, i) => {
-                if (index + i < 6) {
-                    newOtp[index + i] = char;
-                }
-            });
-            setOtp(newOtp);
 
-            // Focus last filled input or last input
-            const lastIndex = Math.min(index + otpArray.length, 5);
-            inputs.current[lastIndex]?.focus();
-            return;
-        }
-
-        const newOtp = [...otp];
-        newOtp[index] = text;
-        setOtp(newOtp);
-
-        // Auto focus next input
-        if (text.length !== 0 && index < 5) {
-            inputs.current[index + 1].focus();
-        }
-    };
-
-    const handleKeyPress = (e: any, index: number) => {
-        if (e.nativeEvent.key === 'Backspace' && otp[index] === '' && index > 0) {
-            inputs.current[index - 1].focus();
-        }
-    };
 
     const handleVerify = async () => {
         const otpString = otp.join('');
@@ -135,22 +102,33 @@ export default function OTPScreen() {
                         </Text>
                     </View>
 
-                    <View className="flex-row justify-between mb-12 mt-8">
-                        {otp.map((digit, index) => (
-                            <TextInput
-                                key={index}
-                                ref={(ref) => { inputs.current[index] = ref as TextInput; }}
-                                className={`w-12 h-14 border-2 rounded-xl text-center text-xl font-bold bg-surface focus:border-primary ${digit ? 'border-primary' : 'border-gray-100'}`}
-                                keyboardType="number-pad"
-                                maxLength={index === 0 ? 6 : 1}
-                                value={digit}
-                                onChangeText={(text) => handleChange(text, index)}
-                                onKeyPress={(e) => handleKeyPress(e, index)}
-                                editable={!loading}
-                                textContentType={index === 0 ? "oneTimeCode" : "none"}
-                                autoComplete={index === 0 ? "sms-otp" : "off"}
-                            />
-                        ))}
+                    <View className="relative h-20 mb-12 mt-8">
+                        {/* Hidden single input for autofill */}
+                        <TextInput
+                            className="absolute opacity-0 w-full h-full z-10"
+                            keyboardType="number-pad"
+                            maxLength={6}
+                            value={otp.join('')}
+                            onChangeText={(text) => {
+                                const newOtp = text.slice(0, 6).split('').concat(Array(6).fill('')).slice(0, 6);
+                                setOtp(newOtp);
+                            }}
+                            textContentType="oneTimeCode"
+                            autoComplete="sms-otp"
+                            autoFocus={true}
+                            editable={!loading}
+                        />
+                        {/* Visual OTP Digits */}
+                        <View className="flex-row justify-between w-full h-full">
+                            {otp.map((digit, index) => (
+                                <View
+                                    key={index}
+                                    className={`w-12 h-14 border-2 rounded-xl items-center justify-center bg-surface ${digit ? 'border-primary' : 'border-gray-100'}`}
+                                >
+                                    <Text className="text-xl font-bold text-accent-dark">{digit}</Text>
+                                </View>
+                            ))}
+                        </View>
                     </View>
 
                     <TouchableOpacity

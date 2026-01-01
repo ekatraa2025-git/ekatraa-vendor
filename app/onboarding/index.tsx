@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, Image, KeyboardAvoidingView, Platform, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, Image, KeyboardAvoidingView, Platform, ActivityIndicator, Alert, Modal, FlatList } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Camera, Plus, Store, User, MapPin, Check, Search, X, ArrowRight } from 'lucide-react-native';
+import { Camera, Plus, Store, User, MapPin, Check, Search, X, ArrowRight, ChevronDown, Tag } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
-// @ts-ignore - expo-location might not have types in this environment
+// @ts-ignore
 import * as Location from 'expo-location';
 import { supabase } from '../../lib/supabase';
+import { useTranslation } from 'react-i18next';
 
 const MOCK_LOCATIONS = [
     'Indiranagar, Bengaluru, Karnataka, India',
@@ -15,10 +16,14 @@ const MOCK_LOCATIONS = [
     'Jayanagar, Bengaluru, Karnataka, India',
     'Whitefield, Bengaluru, Karnataka, India',
     'MG Road, Bengaluru, Karnataka, India',
+    'Bhubaneswar, Odisha, India',
+    'Cuttack, Odisha, India',
+    'Puri, Odisha, India',
 ];
 
 export default function OnboardingScreen() {
     const router = useRouter();
+    const { t } = useTranslation();
     const { phone: phoneParam } = useLocalSearchParams<{ phone: string }>();
     const [step, setStep] = useState(1);
     const [profileImage, setProfileImage] = useState<string | null>(null);
@@ -29,10 +34,13 @@ export default function OnboardingScreen() {
     const [suggestions, setSuggestions] = useState<string[]>([]);
     const [hasServices, setHasServices] = useState(false);
     const [serviceCount, setServiceCount] = useState(0);
+    const [categories, setCategories] = useState<{ id: string, name: string }[]>([]);
+    const [showCategoryModal, setShowCategoryModal] = useState(false);
 
     const [formData, setFormData] = useState({
         businessName: '',
         category: '',
+        categoryId: '',
         description: '',
         phone: phoneParam || '',
         address: '',
@@ -41,50 +49,62 @@ export default function OnboardingScreen() {
     });
 
     useEffect(() => {
-        const fetchInitialData = async () => {
-            try {
-                setFetching(true);
-                const { data: { user } } = await supabase.auth.getUser();
-                if (!user) return;
-
-                const { data: vendor, error } = await supabase
-                    .from('vendors')
-                    .select('*')
-                    .eq('id', user.id)
-                    .maybeSingle();
-
-                if (vendor) {
-                    setFormData(prev => ({
-                        ...prev,
-                        businessName: vendor.business_name || prev.businessName,
-                        category: vendor.category || prev.category,
-                        description: vendor.description || prev.description,
-                        phone: vendor.phone || prev.phone,
-                        address: vendor.address || prev.address,
-                    }));
-                    if (vendor.address) setLocationQuery(vendor.address);
-                    if (vendor.logo_url) setProfileImage(vendor.logo_url);
-                }
-
-                // Check for existing services
-                const { count } = await supabase
-                    .from('services')
-                    .select('*', { count: 'exact', head: true })
-                    .eq('vendor_id', user.id);
-
-                if (count && count > 0) {
-                    setHasServices(true);
-                    setServiceCount(count);
-                }
-            } catch (error) {
-                console.error('Error fetching initial onboarding data:', error);
-            } finally {
-                setFetching(false);
-            }
-        };
-
         fetchInitialData();
+        fetchCategories();
     }, []);
+
+    const fetchCategories = async () => {
+        try {
+            const { data, error } = await supabase
+                .from('vendor_categories')
+                .select('id, name')
+                .order('name');
+            if (data) setCategories(data);
+        } catch (error) {
+            console.error('Error fetching categories:', error);
+        }
+    };
+
+    const fetchInitialData = async () => {
+        try {
+            setFetching(true);
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) return;
+
+            const { data: vendor, error } = await supabase
+                .from('vendors')
+                .select('*')
+                .eq('id', user.id)
+                .maybeSingle();
+
+            if (vendor) {
+                setFormData(prev => ({
+                    ...prev,
+                    businessName: vendor.business_name || prev.businessName,
+                    category: vendor.category || prev.category,
+                    description: vendor.description || prev.description,
+                    phone: vendor.phone || prev.phone,
+                    address: vendor.address || prev.address,
+                }));
+                if (vendor.address) setLocationQuery(vendor.address);
+                if (vendor.logo_url) setProfileImage(vendor.logo_url);
+            }
+
+            const { count } = await supabase
+                .from('services')
+                .select('*', { count: 'exact', head: true })
+                .eq('vendor_id', user.id);
+
+            if (count && count > 0) {
+                setHasServices(true);
+                setServiceCount(count);
+            }
+        } catch (error) {
+            console.error('Error fetching initial onboarding data:', error);
+        } finally {
+            setFetching(false);
+        }
+    };
 
     useEffect(() => {
         if (locationQuery.length > 2) {
@@ -140,6 +160,42 @@ export default function OnboardingScreen() {
         }
     };
 
+    const uploadImage = async (uri: string, prefix: string = 'image') => {
+        try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) throw new Error('Not authenticated');
+
+            const fileName = `${prefix}-${Date.now()}.jpg`;
+
+            const formData = new FormData();
+            formData.append('file', {
+                uri: uri,
+                name: fileName,
+                type: 'image/jpeg',
+            } as any);
+
+            const { data, error } = await supabase.storage
+                .from('ekatraa2025')
+                .upload(fileName, formData, {
+                    contentType: 'image/jpeg'
+                });
+
+            if (error) {
+                console.error('[STORAGE ERROR DETAIL]', error);
+                throw error;
+            }
+
+            const { data: { publicUrl } } = supabase.storage
+                .from('ekatraa2025')
+                .getPublicUrl(fileName);
+
+            return publicUrl;
+        } catch (error: any) {
+            console.error('[UPLOAD CATCH]', error);
+            throw error;
+        }
+    };
+
     const handleNext = async () => {
         if (step < 3) {
             setStep(step + 1);
@@ -149,7 +205,16 @@ export default function OnboardingScreen() {
                 const { data: { user } } = await supabase.auth.getUser();
                 if (!user) throw new Error('No user found');
 
-                // 1. Update Vendor Profile
+                let finalLogoUrl = profileImage;
+                if (profileImage && (profileImage.startsWith('file:') || profileImage.startsWith('content:'))) {
+                    finalLogoUrl = await uploadImage(profileImage, 'logo');
+                }
+
+                let finalServiceImageUrl = serviceImage;
+                if (serviceImage && (serviceImage.startsWith('file:') || serviceImage.startsWith('content:'))) {
+                    finalServiceImageUrl = await uploadImage(serviceImage, 'service');
+                }
+
                 const { error: vendorError } = await supabase
                     .from('vendors')
                     .upsert({
@@ -159,12 +224,11 @@ export default function OnboardingScreen() {
                         phone: formData.phone,
                         address: locationQuery,
                         description: formData.description,
-                        logo_url: profileImage,
+                        logo_url: finalLogoUrl,
                     });
 
                 if (vendorError) throw vendorError;
 
-                // 2. Create Initial Service (only if new service data is provided and no services exist)
                 if (!hasServices && formData.serviceName && formData.servicePrice) {
                     const { error: serviceError } = await supabase
                         .from('services')
@@ -173,7 +237,7 @@ export default function OnboardingScreen() {
                             name: formData.serviceName,
                             category: formData.category || 'Service',
                             price_amount: parseFloat(formData.servicePrice),
-                            image_urls: serviceImage ? [serviceImage] : [],
+                            image_urls: finalServiceImageUrl ? [finalServiceImageUrl] : [],
                             is_active: true
                         } as any);
 
@@ -191,127 +255,181 @@ export default function OnboardingScreen() {
     };
 
     const selectSuggestion = (loc: string) => {
-        setFormData({ ...formData, address: loc });
+        setFormData(prev => ({ ...prev, address: loc }));
         setLocationQuery(loc);
         setSuggestions([]);
     };
 
+    const renderCategoryModal = () => (
+        <Modal
+            visible={showCategoryModal}
+            transparent={true}
+            animationType="slide"
+            onRequestClose={() => setShowCategoryModal(false)}
+        >
+            <View className="flex-1 justify-end bg-black/50">
+                <View className="bg-white rounded-t-3xl h-[60%] p-6">
+                    <View className="flex-row justify-between items-center mb-6">
+                        <Text className="text-xl font-bold text-accent-dark">Select Category</Text>
+                        <TouchableOpacity onPress={() => setShowCategoryModal(false)}>
+                            <X size={24} color="#6B7280" />
+                        </TouchableOpacity>
+                    </View>
+                    <FlatList
+                        data={categories}
+                        keyExtractor={(item) => item.id}
+                        renderItem={({ item }) => (
+                            <TouchableOpacity
+                                onPress={() => {
+                                    setFormData({ ...formData, category: item.name, categoryId: item.id });
+                                    setShowCategoryModal(false);
+                                }}
+                                className={`py-4 px-4 rounded-xl mb-2 flex-row items-center justify-between ${formData.category === item.name ? 'bg-primary/10 border border-primary/20' : 'bg-gray-50'}`}
+                            >
+                                <Text className={`text-base font-bold ${formData.category === item.name ? 'text-primary' : 'text-accent-dark'}`}>
+                                    {item.name}
+                                </Text>
+                                {formData.category === item.name && <Check size={20} color="#FF6B00" />}
+                            </TouchableOpacity>
+                        )}
+                        showsVerticalScrollIndicator={false}
+                    />
+                </View>
+            </View>
+        </Modal>
+    );
+
     const renderStep1 = () => (
         <View className="flex-1">
-            <Text className="text-2xl font-bold text-black mb-2">Business Profile</Text>
-            <Text className="text-accent mb-8">Tell us about your service or business</Text>
+            <Text className="text-3xl font-bold text-accent-dark mb-2">Business Profile</Text>
+            <Text className="text-accent text-base mb-8">Tell us about your service or business</Text>
 
             <View className="items-center mb-10">
                 <TouchableOpacity
                     onPress={() => pickImage('profile')}
-                    className="w-32 h-32 bg-surface rounded-full border-2 border-dashed border-gray-300 items-center justify-center overflow-hidden"
+                    className="w-36 h-36 bg-surface rounded-3xl border-2 border-dashed border-gray-200 items-center justify-center overflow-hidden shadow-sm"
                 >
                     {profileImage ? (
                         <Image source={{ uri: profileImage }} className="w-full h-full" />
                     ) : (
                         <View className="items-center">
-                            <Camera size={32} color="#9CA3AF" />
-                            <Text className="text-[10px] text-accent mt-1 uppercase font-bold">Add Logo</Text>
+                            <Camera size={40} color="#FF6B00" strokeWidth={1.5} />
+                            <Text className="text-xs text-accent mt-2 font-bold uppercase tracking-widest text-center px-4">Upload Logo or Profile Picture</Text>
                         </View>
                     )}
-                    <View className="absolute bottom-0 right-2 bg-primary p-2 rounded-full border-4 border-white">
-                        <Plus size={16} color="white" />
+                    <View className="absolute bottom-2 right-2 bg-primary p-2.5 rounded-2xl border-4 border-white shadow-md">
+                        <Plus size={18} color="white" strokeWidth={3} />
                     </View>
                 </TouchableOpacity>
             </View>
 
             <View className="space-y-6">
                 <View>
-                    <Text className="text-sm font-bold text-accent-dark mb-2">Business Name</Text>
-                    <View className="flex-row items-center bg-white border border-gray-200 rounded-2xl px-4 py-4">
-                        <Store size={22} color="#FF6B00" className="mr-3" />
+                    <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">Business Name</Text>
+                    <View className="flex-row items-center bg-white border-2 border-gray-100 rounded-2xl px-4 py-4 focus:border-primary">
+                        <Store size={22} color="#000000" className="mr-3" strokeWidth={2.5} />
                         <TextInput
                             placeholder="e.g. Royal Catering Services"
                             placeholderTextColor="#9CA3AF"
                             value={formData.businessName}
                             onChangeText={(text) => setFormData({ ...formData, businessName: text })}
-                            className="flex-1 text-black font-semibold text-base py-1"
-                            style={{ color: '#000000', minHeight: 40 }}
+                            className="flex-1 text-black font-extrabold text-lg py-1"
+                            style={{ color: '#000000' }}
                         />
                     </View>
                 </View>
 
                 <View className="mt-4">
-                    <Text className="text-sm font-bold text-accent-dark mb-2">Category</Text>
-                    <View className="flex-row items-center bg-white border border-gray-200 rounded-2xl px-4 py-4">
-                        <Plus size={22} color="#FF6B00" className="mr-3" />
-                        <TextInput
-                            placeholder="e.g. Venue, Catering, Decor"
-                            placeholderTextColor="#9CA3AF"
-                            value={formData.category}
-                            onChangeText={(text) => setFormData({ ...formData, category: text })}
-                            className="flex-1 text-black font-semibold text-base py-1"
-                            style={{ color: '#000000', minHeight: 40 }}
-                        />
-                    </View>
+                    <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">Business Category</Text>
+                    <TouchableOpacity
+                        onPress={() => setShowCategoryModal(true)}
+                        className="flex-row items-center bg-white border-2 border-gray-100 rounded-2xl px-4 py-4"
+                    >
+                        <Tag size={22} color="#000000" className="mr-3" strokeWidth={2.5} />
+                        <Text className={`flex-1 font-extrabold text-lg ${formData.category ? 'text-black' : 'text-gray-400'}`}>
+                            {formData.category || 'Select Category'}
+                        </Text>
+                        <ChevronDown size={22} color="#9CA3AF" />
+                    </TouchableOpacity>
+                </View>
+
+                <View className="mt-4">
+                    <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">Brief Description</Text>
+                    <TextInput
+                        placeholder="Tell clients what makes you special..."
+                        placeholderTextColor="#9CA3AF"
+                        multiline
+                        numberOfLines={4}
+                        value={formData.description}
+                        onChangeText={(text) => setFormData({ ...formData, description: text })}
+                        className="bg-white border-2 border-gray-100 rounded-3xl px-5 py-5 text-black font-bold text-base h-32"
+                        style={{ textAlignVertical: 'top' }}
+                    />
                 </View>
             </View>
+            {renderCategoryModal()}
         </View>
     );
 
     const renderStep2 = () => (
         <View className="flex-1">
-            <Text className="text-2xl font-bold text-black mb-2">Contact Details</Text>
-            <Text className="text-accent mb-8">Where can clients reach you?</Text>
+            <Text className="text-3xl font-bold text-accent-dark mb-2">Location & Contact</Text>
+            <Text className="text-accent text-base mb-8">Where can clients reach you?</Text>
 
             <View className="space-y-6">
                 <View>
-                    <Text className="text-sm font-bold text-accent-dark mb-2">Phone Number</Text>
-                    <View className="flex-row items-center bg-gray-50 border border-gray-200 rounded-2xl px-4 py-4">
-                        <Text className="text-accent font-bold mr-3">+91</Text>
+                    <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">Official Phone Number</Text>
+                    <View className="flex-row items-center bg-gray-50 border-2 border-gray-100 rounded-2xl px-4 py-4">
+                        <Text className="text-accent font-extrabold text-lg mr-3">+91</Text>
                         <TextInput
                             value={formData.phone}
                             editable={false}
-                            className="flex-1 text-black font-semibold text-base py-1"
-                            style={{ color: '#000000', minHeight: 40 }}
+                            className="flex-1 text-black font-extrabold text-lg py-1"
                         />
-                        <Check size={20} color="#10B981" />
+                        <View className="bg-green-100 p-1 rounded-full">
+                            <Check size={16} color="#059669" strokeWidth={3} />
+                        </View>
                     </View>
-                    <Text className="text-[10px] text-green-600 mt-2 font-bold uppercase tracking-wider">Verified Number</Text>
+                    <Text className="text-green-600 text-[10px] font-bold uppercase tracking-widest mt-2 ml-1">✓ Verified Phone Number</Text>
                 </View>
 
                 <View className="mt-4">
-                    <Text className="text-sm font-bold text-accent-dark mb-2">Location / Address</Text>
-                    <View className="bg-white border border-gray-200 rounded-2xl p-2">
-                        <View className="flex-row items-center justify-between px-4 py-2 border-b border-gray-50">
-                            <Text className="text-accent text-xs font-bold uppercase tracking-widest">Pinpoint Location</Text>
+                    <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">Service Location / Address</Text>
+                    <View className="bg-white border-2 border-gray-100 rounded-3xl p-3">
+                        <View className="flex-row items-center justify-between px-3 py-2 border-b border-gray-100 mb-2">
+                            <Text className="text-accent text-[10px] font-bold uppercase tracking-widest">Pinpoint on Map</Text>
                             <TouchableOpacity
                                 onPress={getCurrentLocation}
-                                className="flex-row items-center"
+                                className="flex-row items-center bg-primary/10 px-3 py-1.5 rounded-full"
                             >
-                                <MapPin size={14} color="#FF6B00" />
-                                <Text className="text-primary text-xs font-bold ml-1">Use Current</Text>
+                                <MapPin size={14} color="#FF6B00" strokeWidth={2.5} />
+                                <Text className="text-primary text-xs font-bold ml-1">Auto-detect</Text>
                             </TouchableOpacity>
                         </View>
                         <View className="flex-row items-start px-2 py-2">
-                            <MapPin size={22} color="#FF6B00" className="mr-3 mt-1" />
+                            <MapPin size={24} color="#000000" className="mr-3 mt-1" strokeWidth={2} />
                             <TextInput
-                                placeholder="Search area or enter full address"
+                                placeholder="Search area or enter full address..."
                                 placeholderTextColor="#9CA3AF"
                                 multiline
-                                numberOfLines={3}
+                                numberOfLines={4}
                                 value={locationQuery}
                                 onChangeText={setLocationQuery}
-                                className="flex-1 text-black font-semibold text-base"
-                                style={{ color: '#000000', minHeight: 80, textAlignVertical: 'top' }}
+                                className="flex-1 text-black font-extrabold text-lg"
+                                style={{ textAlignVertical: 'top', minHeight: 100 }}
                             />
                         </View>
 
                         {suggestions.length > 0 && (
-                            <View className="border-t border-gray-50 pt-2 px-2 pb-2">
+                            <View className="border-t border-gray-50 pt-2 px-2 pb-2 mt-2">
                                 {suggestions.map((loc, idx) => (
                                     <TouchableOpacity
                                         key={idx}
                                         onPress={() => selectSuggestion(loc)}
-                                        className="flex-row items-center py-3 border-b border-gray-50 last:border-0"
+                                        className="flex-row items-center py-4 border-b border-gray-50 bg-gray-50/50 rounded-xl px-4 mb-2"
                                     >
                                         <Search size={16} color="#4B5563" className="mr-3" />
-                                        <Text className="text-accent-dark text-sm flex-1" numberOfLines={1}>{loc}</Text>
+                                        <Text className="text-accent-dark font-bold text-sm flex-1" numberOfLines={1}>{loc}</Text>
                                     </TouchableOpacity>
                                 ))}
                             </View>
@@ -326,54 +444,56 @@ export default function OnboardingScreen() {
         <View className="flex-1">
             {hasServices ? (
                 <>
-                    <Text className="text-2xl font-bold text-black mb-2">Your Services</Text>
-                    <Text className="text-accent mb-8">You have {serviceCount} service{serviceCount > 1 ? 's' : ''} listed</Text>
+                    <Text className="text-3xl font-bold text-accent-dark mb-2">Your Listings</Text>
+                    <Text className="text-accent text-base mb-8">You have {serviceCount} service{serviceCount > 1 ? 's' : ''} active</Text>
 
-                    <View className="bg-green-50 border-2 border-green-200 rounded-3xl p-8 items-center mb-8">
-                        <View className="w-20 h-20 bg-green-100 rounded-full items-center justify-center mb-4">
-                            <Check size={40} color="#10B981" strokeWidth={3} />
+                    <View className="bg-green-50 border-2 border-green-100 rounded-3xl p-10 items-center mb-8 shadow-sm">
+                        <View className="w-24 h-24 bg-green-100 rounded-full items-center justify-center mb-6">
+                            <Check size={48} color="#059669" strokeWidth={3} />
                         </View>
-                        <Text className="text-green-900 font-bold text-xl mb-2">Services Already Added</Text>
-                        <Text className="text-green-700 text-center text-sm">
-                            You can manage your services from the Services tab
+                        <Text className="text-green-900 font-extrabold text-2xl mb-2">Profile Ready!</Text>
+                        <Text className="text-green-700 text-center text-base font-medium leading-6">
+                            Your existing services are listed. You're ready to start receiving new bookings.
                         </Text>
                     </View>
 
                     <TouchableOpacity
                         onPress={() => router.push('/(tabs)/services')}
-                        className="bg-primary/10 border border-primary/20 rounded-2xl p-4 flex-row items-center justify-between"
+                        className="bg-white border-2 border-gray-100 rounded-3xl p-6 flex-row items-center justify-between shadow-sm"
                     >
                         <View className="flex-1">
-                            <Text className="text-primary font-bold text-base">Manage Services</Text>
-                            <Text className="text-accent text-xs mt-1">Add, edit, or remove your services</Text>
+                            <Text className="text-accent-dark font-extrabold text-xl">Manage Catalog</Text>
+                            <Text className="text-accent font-bold text-sm mt-1">Add or edit more services</Text>
                         </View>
-                        <ArrowRight size={20} color="#FF6B00" />
+                        <View className="bg-primary/10 p-3 rounded-2xl">
+                            <ArrowRight size={24} color="#FF6B00" strokeWidth={2.5} />
+                        </View>
                     </TouchableOpacity>
                 </>
             ) : (
                 <>
-                    <Text className="text-2xl font-bold text-black mb-2">First Service</Text>
-                    <Text className="text-accent mb-8">Add your first service to start getting bookings</Text>
+                    <Text className="text-3xl font-bold text-accent-dark mb-2">Starter Service</Text>
+                    <Text className="text-accent text-base mb-8">Add your primary listing to get started</Text>
 
                     <TouchableOpacity
                         onPress={() => pickImage('service')}
-                        className="bg-primary/5 border-2 border-dashed border-primary/20 rounded-3xl p-2 mb-8 items-center overflow-hidden"
+                        className="bg-white border-2 border-dashed border-gray-200 rounded-3xl p-3 mb-8 items-center overflow-hidden shadow-sm"
                     >
                         {serviceImage ? (
-                            <Image source={{ uri: serviceImage }} className="w-full h-48 rounded-2xl" resizeMode="cover" />
+                            <Image source={{ uri: serviceImage }} className="w-full h-56 rounded-2xl" resizeMode="cover" />
                         ) : (
-                            <View className="py-10 items-center">
-                                <View className="w-16 h-16 bg-white border border-gray-100 rounded-2xl items-center justify-center mb-4">
-                                    <Plus size={32} color="#FF6B00" />
+                            <View className="py-12 items-center">
+                                <View className="w-20 h-20 bg-primary/10 rounded-3xl items-center justify-center mb-5">
+                                    <Plus size={40} color="#FF6B00" strokeWidth={2.5} />
                                 </View>
-                                <Text className="text-black font-bold text-lg">Add Service Photo</Text>
-                                <Text className="text-accent text-xs mt-1">High quality photos attract 3x more bookings</Text>
+                                <Text className="text-accent-dark font-extrabold text-xl">Upload Cover Photo</Text>
+                                <Text className="text-accent text-sm mt-2 font-bold px-10 text-center">Showcase your best work to attract high-value clients.</Text>
                             </View>
                         )}
                         {serviceImage && (
                             <TouchableOpacity
                                 onPress={() => setServiceImage(null)}
-                                className="absolute top-4 right-4 bg-black/50 p-2 rounded-full"
+                                className="absolute top-4 right-4 bg-black/60 p-2.5 rounded-full"
                             >
                                 <X size={20} color="white" />
                             </TouchableOpacity>
@@ -382,29 +502,28 @@ export default function OnboardingScreen() {
 
                     <View className="space-y-6">
                         <View>
-                            <Text className="text-sm font-bold text-accent-dark mb-2">Service Name</Text>
+                            <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">Listing Name</Text>
                             <TextInput
-                                placeholder="e.g. Wedding Hall Rental"
+                                placeholder="e.g. Premium Wedding Photography"
                                 placeholderTextColor="#9CA3AF"
                                 value={formData.serviceName}
                                 onChangeText={(text) => setFormData({ ...formData, serviceName: text })}
-                                className="bg-white border border-gray-200 rounded-2xl px-4 py-4 text-black font-semibold text-base"
-                                style={{ color: '#000000', minHeight: 56 }}
+                                className="bg-white border-2 border-gray-100 rounded-2xl px-5 py-5 text-black font-extrabold text-lg"
+                                style={{ color: '#000000' }}
                             />
                         </View>
 
                         <View className="mt-4">
-                            <Text className="text-sm font-bold text-accent-dark mb-2">Base Price (₹)</Text>
-                            <View className="flex-row items-center bg-white border border-gray-200 rounded-2xl px-4 py-4">
-                                <Text className="text-black font-bold mr-2">₹</Text>
+                            <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">Base Package Price (₹)</Text>
+                            <View className="flex-row items-center bg-white border-2 border-gray-100 rounded-2xl px-5 py-5">
+                                <Text className="text-black font-extrabold text-xl mr-3">₹</Text>
                                 <TextInput
-                                    placeholder="e.g. 50000"
+                                    placeholder="e.g. 25000"
                                     placeholderTextColor="#9CA3AF"
                                     keyboardType="number-pad"
                                     value={formData.servicePrice}
                                     onChangeText={(text) => setFormData({ ...formData, servicePrice: text })}
-                                    className="flex-1 text-black font-semibold text-base"
-                                    style={{ color: '#000000', minHeight: 40 }}
+                                    className="flex-1 text-black font-extrabold text-xl"
                                 />
                             </View>
                         </View>
@@ -416,37 +535,29 @@ export default function OnboardingScreen() {
 
     return (
         <SafeAreaView className="flex-1 bg-white">
-            <View className="h-1 bg-gray-100 w-full mb-8">
-                <View
-                    className="h-1 bg-primary"
-                    style={{ width: `${(step / 3) * 100}%` }}
-                />
+            <View className="px-6 pt-4 flex-row justify-between items-center bg-white">
+                <Text className="text-accent-dark font-extrabold text-sm tracking-widest uppercase">
+                    Registration • Step {step}/3
+                </Text>
+                <View className="flex-row">
+                    {[1, 2, 3].map((s) => (
+                        <View
+                            key={s}
+                            className={`h-1.5 rounded-full mx-1 ${step >= s ? 'w-8 bg-primary' : 'w-4 bg-gray-100'}`}
+                        />
+                    ))}
+                </View>
             </View>
 
             <KeyboardAvoidingView
                 behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
                 className="flex-1"
             >
-                <ScrollView contentContainerStyle={{ flexGrow: 1 }} className="px-6 pb-8">
-                    <View className="flex-row items-center mb-10">
-                        {[1, 2, 3].map((s) => (
-                            <React.Fragment key={s}>
-                                <View className={`w-10 h-10 rounded-full items-center justify-center ${step >= s ? 'bg-primary' : 'bg-gray-100'}`}>
-                                    {step > s ? (
-                                        <Check size={18} color="white" strokeWidth={3} />
-                                    ) : (
-                                        <Text className={`${step >= s ? 'text-white' : 'text-gray-400'} font-bold`}>{s}</Text>
-                                    )}
-                                </View>
-                                {s < 3 && <View className={`h-1 flex-1 mx-2 ${step > s ? 'bg-primary' : 'bg-gray-100'}`} />}
-                            </React.Fragment>
-                        ))}
-                    </View>
-
+                <ScrollView contentContainerStyle={{ flexGrow: 1 }} className="px-6 pt-10 pb-12">
                     {fetching ? (
                         <View className="flex-1 items-center justify-center py-20">
                             <ActivityIndicator size="large" color="#FF6B00" />
-                            <Text className="text-accent mt-4 font-medium">Loading your profile...</Text>
+                            <Text className="text-accent mt-4 font-bold tracking-wider">Syncing your profile...</Text>
                         </View>
                     ) : (
                         <>
@@ -456,21 +567,21 @@ export default function OnboardingScreen() {
                         </>
                     )}
 
-                    <View className="mt-10 mb-8">
+                    <View className="mt-12 mb-6">
                         <TouchableOpacity
                             onPress={handleNext}
-                            disabled={loading}
+                            disabled={loading || (step === 1 && (!formData.businessName || !formData.category))}
                             activeOpacity={0.8}
-                            className={`bg-accent-dark py-5 rounded-2xl flex-row items-center justify-center ${loading ? 'opacity-70' : ''}`}
+                            className={`bg-black py-6 rounded-3xl flex-row items-center justify-center shadow-lg ${loading || (step === 1 && (!formData.businessName || !formData.category)) ? 'opacity-50' : ''}`}
                         >
                             {loading ? (
                                 <ActivityIndicator color="white" />
                             ) : (
                                 <>
-                                    <Text className="text-white font-bold text-lg mr-2">
-                                        {step === 3 ? 'Complete Setup' : 'Continue'}
+                                    <Text className="text-white font-extrabold text-xl mr-3">
+                                        {step === 3 ? 'Finalize Registration' : 'Continue'}
                                     </Text>
-                                    <ArrowRight size={20} color="white" />
+                                    <ArrowRight size={22} color="white" strokeWidth={3} />
                                 </>
                             )}
                         </TouchableOpacity>
@@ -478,9 +589,9 @@ export default function OnboardingScreen() {
                         {step > 1 && (
                             <TouchableOpacity
                                 onPress={() => setStep(step - 1)}
-                                className="mt-5 items-center"
+                                className="mt-6 items-center"
                             >
-                                <Text className="text-accent font-bold text-base">Back to previous step</Text>
+                                <Text className="text-accent font-extrabold text-base border-b-2 border-gray-100 pb-1">Previous Step</Text>
                             </TouchableOpacity>
                         )}
                     </View>

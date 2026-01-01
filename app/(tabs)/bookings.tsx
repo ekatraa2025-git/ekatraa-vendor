@@ -1,12 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, FlatList, Modal, TextInput, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Calendar, Clock, MapPin, Check, X, ChevronRight, Edit3, MessageSquare } from 'lucide-react-native';
+import { Calendar, Clock, MapPin, Check, X, ChevronRight, Edit3, MessageSquare, ReceiptText } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
+import { useTranslation } from 'react-i18next';
+import { formatReceiptData } from '../../lib/receipt';
 
 export default function BookingsScreen() {
+    const { t } = useTranslation();
     const [loading, setLoading] = useState(true);
     const [bookings, setBookings] = useState<any[]>([]);
+    const [vendor, setVendor] = useState<any>(null);
     const [filter, setFilter] = useState('all');
     const [editModalVisible, setEditModalVisible] = useState(false);
     const [editingBooking, setEditingBooking] = useState<any>(null);
@@ -14,7 +18,16 @@ export default function BookingsScreen() {
 
     useEffect(() => {
         fetchBookings();
+        fetchVendor();
     }, []);
+
+    const fetchVendor = async () => {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+            const { data } = await supabase.from('vendors').select('*').eq('id', user.id).maybeSingle();
+            setVendor(data);
+        }
+    };
 
     const fetchBookings = async () => {
         try {
@@ -131,13 +144,16 @@ export default function BookingsScreen() {
                 </View>
             )}
 
-            {item.status === 'confirmed' && (
+            {item.status === 'completed' && (
                 <TouchableOpacity
-                    onPress={() => updateBookingStatus(item.id, 'completed')}
+                    onPress={() => {
+                        const receipt = formatReceiptData(item, vendor);
+                        Alert.alert('Receipt Generated', `Receipt ${receipt.receiptId} has been generated.\n\nThank You Message:\n${receipt.thankYouMessage}`);
+                    }}
                     className="mt-6 pt-6 border-t border-gray-50 flex-row items-center justify-center"
                 >
-                    <Check size={18} color="#10B981" />
-                    <Text className="text-green-600 font-bold ml-2">Mark as Completed</Text>
+                    <ReceiptText size={18} color="#FF6B00" />
+                    <Text className="text-primary font-bold ml-2">Generate Receipt</Text>
                 </TouchableOpacity>
             )}
         </TouchableOpacity>
