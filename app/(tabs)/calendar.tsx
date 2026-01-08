@@ -4,8 +4,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Calendar as RNCalendar } from 'react-native-calendars';
 import { Clock, AlertCircle, CheckCircle2 } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
+import { useTheme } from '../../context/ThemeContext';
 
 export default function CalendarScreen() {
+    const { colors, isDarkMode } = useTheme();
     const [loading, setLoading] = useState(true);
     const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
     const [markedDates, setMarkedDates] = useState<any>({});
@@ -81,14 +83,14 @@ export default function CalendarScreen() {
 
     if (loading) {
         return (
-            <SafeAreaView className="flex-1 bg-white items-center justify-center">
+            <SafeAreaView className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
                 <ActivityIndicator size="large" color="#FF6B00" />
             </SafeAreaView>
         );
     }
 
     return (
-        <SafeAreaView className="flex-1 bg-white">
+        <SafeAreaView className="flex-1" style={{ backgroundColor: colors.background }}>
             <View className="px-6 py-4">
                 <Text className="text-2xl font-bold text-accent-dark">Availability</Text>
                 <Text className="text-accent text-xs">Manage your booking calendar</Text>

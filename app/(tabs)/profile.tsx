@@ -1,11 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Image, ActivityIndicator, Alert, Modal, TextInput, Linking, Platform } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { User, Shield, CreditCard, Bell, HelpCircle, LogOut, ChevronRight, Settings, Check, X, Languages } from 'lucide-react-native';
+import { User, Shield, CreditCard, Bell, HelpCircle, LogOut, ChevronRight, Settings, Check, X, Languages, Phone as PhoneIcon, Mail } from 'lucide-react-native';
 import QuickHelp from '../../components/QuickHelp';
 import { supabase } from '../../lib/supabase';
 import { useTranslation } from 'react-i18next';
+import { useTheme } from '../../context/ThemeContext';
+// @ts-ignore - Using legacy API for compatibility
+import * as FileSystem from 'expo-file-system/legacy';
 
 const languages = [
     { code: 'en', name: 'English', native: 'English' },
@@ -17,16 +20,26 @@ import * as ImagePicker from 'expo-image-picker';
 
 export default function ProfileScreen() {
     const router = useRouter();
+    const { openPayout } = useLocalSearchParams();
     const { t, i18n } = useTranslation();
+    const { colors, isDarkMode } = useTheme();
     const [loading, setLoading] = useState(true);
     const [vendor, setVendor] = useState<any>(null);
     const [updating, setUpdating] = useState(false);
     const [showLanguageModal, setShowLanguageModal] = useState(false);
+    const [logoUrl, setLogoUrl] = useState<string>('');
 
     // Modals
     const [payoutModal, setPayoutModal] = useState(false);
     const [taxModal, setTaxModal] = useState(false);
     const [notifModal, setNotifModal] = useState(false);
+    const [supportModal, setSupportModal] = useState(false);
+    
+    // Support contact details
+    const supportContacts = {
+        phones: ['+91 9876543210', '+91 1234567890'],
+        emails: ['support@ekatraa.com', 'help@ekatraa.com']
+    };
 
     // Temporary state for editing
     const [editData, setEditData] = useState<any>({});
@@ -34,6 +47,60 @@ export default function ProfileScreen() {
     useEffect(() => {
         fetchProfile();
     }, []);
+
+    // Open payout modal if navigated from dashboard
+    useEffect(() => {
+        if (openPayout === 'true' && !loading) {
+            setPayoutModal(true);
+        }
+    }, [openPayout, loading]);
+
+    // Helper function to get signed URL from file path or existing URL
+    const getImageUrl = async (urlOrPath: string | null | undefined): Promise<string> => {
+        if (!urlOrPath) return '';
+        
+        try {
+            let fileName = urlOrPath;
+            
+            // If it's already a full URL, extract the filename
+            if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
+                // Extract filename from Supabase storage URL
+                const urlMatch = urlOrPath.match(/\/ekatraa2025\/([^/?]+)/);
+                if (urlMatch && urlMatch[1]) {
+                    fileName = urlMatch[1];
+                } else {
+                    // If it's already a signed URL with token, return as-is
+                    if (urlOrPath.includes('token=')) {
+                        return urlOrPath;
+                    }
+                    // Otherwise try to extract filename from end of URL
+                    fileName = urlOrPath.split('/').pop()?.split('?')[0] || urlOrPath;
+                }
+            } else if (urlOrPath.includes('/')) {
+                // Extract filename from path
+                fileName = urlOrPath.split('/').pop() || urlOrPath;
+            }
+            
+            // Generate signed URL (valid for 24 hours for better caching)
+            const { data, error } = await supabase.storage
+                .from('ekatraa2025')
+                .createSignedUrl(fileName, 86400); // 24 hours expiry for faster loading
+
+            if (error) {
+                console.error('[SIGNED URL ERROR]', error, 'fileName:', fileName);
+                // Fallback to public URL
+                const { data: { publicUrl } } = supabase.storage
+                    .from('ekatraa2025')
+                    .getPublicUrl(fileName);
+                return publicUrl;
+            }
+
+            return data.signedUrl;
+        } catch (error) {
+            console.error('[GET IMAGE URL ERROR]', error);
+            return urlOrPath; // Return original if all fails
+        }
+    };
 
     const fetchProfile = async () => {
         try {
@@ -58,6 +125,12 @@ export default function ProfileScreen() {
 
             setVendor(data);
             setEditData(data);
+            
+            // Load signed URL for logo if it exists
+            if (data.logo_url && !data.logo_url.startsWith('file') && !data.logo_url.startsWith('content')) {
+                const signedUrl = await getImageUrl(data.logo_url);
+                setLogoUrl(signedUrl);
+            }
         } catch (error) {
             console.error('Error fetching profile:', error);
         } finally {
@@ -121,24 +194,49 @@ export default function ProfileScreen() {
         return null;
     };
 
+    // Helper to convert base64 to ArrayBuffer
+    const base64ToArrayBuffer = (base64: string): ArrayBuffer => {
+        const binaryString = atob(base64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes.buffer;
+    };
+
     const uploadImage = async (uri: string, prefix: string = 'image') => {
         try {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) throw new Error('Not authenticated');
 
-            const fileName = `${prefix}-${Date.now()}.jpg`;
+            const fileName = `${prefix}-${Date.now()}-${Math.random().toString(36).substring(7)}.jpg`;
+            console.log('[DEBUG] Uploading:', fileName, 'URI:', uri);
 
-            const formData = new FormData();
-            formData.append('file', {
-                uri: uri,
-                name: fileName,
-                type: 'image/jpeg',
-            } as any);
+            let fileData: ArrayBuffer;
+            
+            // Handle local file URIs (file:// or content://)
+            if (uri.startsWith('file://') || uri.startsWith('content://') || uri.startsWith('ph://')) {
+                // Read file as base64 using expo-file-system
+                const base64 = await FileSystem.readAsStringAsync(uri, {
+                    encoding: 'base64' as any,
+                });
+                // Convert base64 to ArrayBuffer
+                fileData = base64ToArrayBuffer(base64);
+            } else if (uri.startsWith('http://') || uri.startsWith('https://')) {
+                // For remote URLs, fetch and convert to ArrayBuffer
+                const response = await fetch(uri);
+                const blob = await response.blob();
+                const arrayBuffer = await blob.arrayBuffer();
+                fileData = arrayBuffer;
+            } else {
+                throw new Error('Unsupported URI format');
+            }
 
             const { data, error } = await supabase.storage
                 .from('ekatraa2025')
-                .upload(fileName, formData, {
-                    contentType: 'image/jpeg'
+                .upload(fileName, fileData, {
+                    contentType: 'image/jpeg',
+                    upsert: false
                 });
 
             if (error) {
@@ -172,15 +270,18 @@ export default function ProfileScreen() {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) return;
 
-            const publicUrl = await uploadImage(result.assets[0].uri, 'logo');
+            const fileName = await uploadImage(result.assets[0].uri, 'logo');
 
             const { error } = await supabase
                 .from('vendors')
-                .update({ logo_url: publicUrl })
+                .update({ logo_url: fileName })
                 .eq('id', user.id);
 
             if (error) throw error;
-            setVendor({ ...vendor, logo_url: publicUrl });
+            setVendor({ ...vendor, logo_url: fileName });
+            // Update logo URL with signed URL
+            const signedUrl = await getImageUrl(fileName);
+            setLogoUrl(signedUrl);
             Alert.alert('Success', 'Profile photo updated successfully');
         } catch (error: any) {
             Alert.alert('Error', error.message || 'Failed to update profile photo');
@@ -191,7 +292,7 @@ export default function ProfileScreen() {
 
     if (loading) {
         return (
-            <SafeAreaView className="flex-1 bg-white items-center justify-center">
+            <SafeAreaView className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
                 <ActivityIndicator size="large" color="#FF6B00" />
             </SafeAreaView>
         );
@@ -222,6 +323,12 @@ export default function ProfileScreen() {
             label: 'Tax Settings',
             subtitle: 'GST and business info',
             onPress: () => setTaxModal(true)
+        },
+        {
+            icon: PhoneIcon,
+            label: 'Contact Support',
+            subtitle: 'Get help from our team',
+            onPress: () => setSupportModal(true)
         },
     ];
 
@@ -256,30 +363,35 @@ export default function ProfileScreen() {
     );
 
     return (
-        <SafeAreaView className="flex-1 bg-white">
+        <SafeAreaView className="flex-1" style={{ backgroundColor: colors.background }}>
             <ScrollView className="flex-1 px-6">
                 <View className="items-center py-10">
                     <View className="relative">
-                        <View className="w-32 h-32 rounded-full border-4 border-surface overflow-hidden bg-surface items-center justify-center">
-                            {vendor?.logo_url ? (
+                        <View className="w-32 h-32 rounded-full border-4 overflow-hidden items-center justify-center" style={{ borderColor: colors.surface, backgroundColor: colors.surface }}>
+                            {logoUrl ? (
                                 <Image
-                                    source={{ uri: vendor.logo_url }}
+                                    source={{ uri: logoUrl }}
                                     className="w-full h-full"
+                                    onError={(e) => {
+                                        console.error('[IMAGE LOAD ERROR] Profile:', e.nativeEvent.error, 'URI:', logoUrl);
+                                        setLogoUrl(''); // Clear on error
+                                    }}
                                 />
                             ) : (
-                                <User size={64} color="#D1D5DB" />
+                                <User size={64} color={colors.textSecondary} />
                             )}
                         </View>
                         <TouchableOpacity
                             onPress={handleUpdateLogo}
                             disabled={updating}
-                            className="absolute bottom-1 right-1 bg-primary w-10 h-10 rounded-full items-center justify-center border-4 border-white shadow-sm"
+                            className="absolute bottom-1 right-1 bg-primary w-10 h-10 rounded-full items-center justify-center border-4 shadow-sm"
+                            style={{ borderColor: colors.background }}
                         >
                             {updating ? <ActivityIndicator size="small" color="white" /> : <Settings size={18} color="white" />}
                         </TouchableOpacity>
                     </View>
-                    <Text className="text-2xl font-bold text-accent-dark mt-6">{vendor?.business_name || 'Business Name'}</Text>
-                    <Text className="text-accent font-medium mt-1">{vendor?.category || 'Category Not Set'}</Text>
+                    <Text className="text-2xl font-bold mt-6" style={{ color: colors.text }}>{vendor?.business_name || 'Business Name'}</Text>
+                    <Text className="font-medium mt-1" style={{ color: colors.textSecondary }}>{vendor?.category || 'Category Not Set'}</Text>
 
                     <View className="flex-row items-center mt-4">
                         {vendor?.is_verified ? (
@@ -310,15 +422,16 @@ export default function ProfileScreen() {
                             key={index}
                             onPress={item.onPress}
                             activeOpacity={0.7}
-                            className="flex-row items-center justify-between py-5 border-b border-gray-50"
+                            className="flex-row items-center justify-between py-5"
+                            style={{ borderBottomWidth: 1, borderBottomColor: colors.border }}
                         >
                             <View className="flex-row items-center">
-                                <View className="w-12 h-12 bg-surface rounded-2xl items-center justify-center mr-4">
-                                    <item.icon size={22} color="#1F2937" />
+                                <View className="w-12 h-12 rounded-2xl items-center justify-center mr-4" style={{ backgroundColor: colors.surface }}>
+                                    <item.icon size={22} color={colors.text} />
                                 </View>
                                 <View>
-                                    <Text className="text-accent-dark font-bold text-base">{item.label}</Text>
-                                    <Text className="text-accent text-xs mt-0.5">{item.subtitle}</Text>
+                                    <Text className="font-bold text-base" style={{ color: colors.text }}>{item.label}</Text>
+                                    <Text className="text-xs mt-0.5" style={{ color: colors.textSecondary }}>{item.subtitle}</Text>
                                 </View>
                             </View>
                             <View className="flex-row items-center">
@@ -327,7 +440,7 @@ export default function ProfileScreen() {
                                         <Text className={`${item.badge === 'Verified' ? 'text-green-700' : 'text-orange-700'} font-bold text-[10px] uppercase`}>{item.badge}</Text>
                                     </View>
                                 )}
-                                <ChevronRight size={20} color="#D1D5DB" />
+                                <ChevronRight size={20} color={colors.textSecondary} />
                             </View>
                         </TouchableOpacity>
                     ))}
@@ -511,6 +624,85 @@ export default function ProfileScreen() {
 
                             <TouchableOpacity
                                 onPress={() => setShowLanguageModal(false)}
+                                className="mt-8 py-5 items-center justify-center bg-black rounded-3xl"
+                            >
+                                <Text className="text-white font-extrabold text-lg">Close</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </Modal>
+
+                {/* Contact Support Modal */}
+                <Modal
+                    animationType="slide"
+                    transparent={true}
+                    visible={supportModal}
+                    onRequestClose={() => setSupportModal(false)}
+                >
+                    <View className="flex-1 justify-end bg-black/50">
+                        <View className="bg-white rounded-t-[40px] p-8 pb-12">
+                            <View className="flex-row justify-between items-center mb-8">
+                                <View>
+                                    <Text className="text-2xl font-extrabold text-accent-dark">Contact Support</Text>
+                                    <Text className="text-accent text-xs font-bold uppercase tracking-widest mt-1">Get Help</Text>
+                                </View>
+                                <TouchableOpacity
+                                    onPress={() => setSupportModal(false)}
+                                    className="w-10 h-10 bg-gray-50 rounded-full items-center justify-center"
+                                >
+                                    <X size={20} color="#4B5563" />
+                                </TouchableOpacity>
+                            </View>
+
+                            <View className="mb-6">
+                                <Text className="text-sm font-bold text-accent-dark mb-4 uppercase tracking-widest text-[10px]">Phone Support</Text>
+                                {supportContacts.phones.map((phone, idx) => (
+                                    <TouchableOpacity
+                                        key={idx}
+                                        onPress={() => Linking.openURL(`tel:${phone.replace(/\s/g, '')}`)}
+                                        className="flex-row items-center bg-surface p-4 rounded-2xl mb-3"
+                                    >
+                                        <View className="w-10 h-10 bg-green-100 rounded-xl items-center justify-center mr-4">
+                                            <PhoneIcon size={20} color="#10B981" />
+                                        </View>
+                                        <View className="flex-1">
+                                            <Text className="text-accent-dark font-bold text-base">{phone}</Text>
+                                            <Text className="text-accent text-xs">Tap to call</Text>
+                                        </View>
+                                        <ChevronRight size={20} color="#D1D5DB" />
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+
+                            <View className="mb-6">
+                                <Text className="text-sm font-bold text-accent-dark mb-4 uppercase tracking-widest text-[10px]">Email Support</Text>
+                                {supportContacts.emails.map((email, idx) => (
+                                    <TouchableOpacity
+                                        key={idx}
+                                        onPress={() => Linking.openURL(`mailto:${email}`)}
+                                        className="flex-row items-center bg-surface p-4 rounded-2xl mb-3"
+                                    >
+                                        <View className="w-10 h-10 bg-blue-100 rounded-xl items-center justify-center mr-4">
+                                            <Mail size={20} color="#3B82F6" />
+                                        </View>
+                                        <View className="flex-1">
+                                            <Text className="text-accent-dark font-bold text-base">{email}</Text>
+                                            <Text className="text-accent text-xs">Tap to send email</Text>
+                                        </View>
+                                        <ChevronRight size={20} color="#D1D5DB" />
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+
+                            <View className="bg-primary/10 p-5 rounded-3xl border border-primary/20">
+                                <Text className="text-primary font-bold text-center">Support Hours</Text>
+                                <Text className="text-accent text-sm text-center mt-2">
+                                    Monday - Saturday: 9:00 AM - 6:00 PM IST
+                                </Text>
+                            </View>
+
+                            <TouchableOpacity
+                                onPress={() => setSupportModal(false)}
                                 className="mt-8 py-5 items-center justify-center bg-black rounded-3xl"
                             >
                                 <Text className="text-white font-extrabold text-lg">Close</Text>

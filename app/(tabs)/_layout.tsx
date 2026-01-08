@@ -1,41 +1,42 @@
 import { Tabs, useRouter } from 'expo-router';
-import { View, Image, TouchableOpacity } from 'react-native';
+import { View, TouchableOpacity } from 'react-native';
 import { LayoutDashboard, ShoppingBag, Calendar, BookOpenCheck, UserCircle, Settings } from 'lucide-react-native';
+import Logo from '../../components/Logo';
+import { useTheme } from '../../context/ThemeContext';
 
 export default function TabLayout() {
     const router = useRouter();
+    const { colors, isDarkMode } = useTheme();
+    
     return (
         <Tabs
             screenOptions={{
-                tabBarActiveTintColor: '#000000',
-                tabBarInactiveTintColor: '#6B7280',
+                tabBarActiveTintColor: colors.text,
+                tabBarInactiveTintColor: colors.textSecondary,
                 tabBarStyle: {
                     borderTopWidth: 1,
-                    borderTopColor: '#E5E7EB',
-                    height: 95,
-                    paddingBottom: 35,
-                    paddingTop: 12,
-                    backgroundColor: '#FFFFFF',
+                    borderTopColor: colors.border,
+                    height: 85,
+                    paddingBottom: 25,
+                    paddingTop: 10,
+                    backgroundColor: colors.background,
                 },
                 headerShown: true,
                 headerStyle: {
-                    backgroundColor: '#FFFFFF',
+                    backgroundColor: colors.background,
                     elevation: 0,
                     shadowOpacity: 0,
                     borderBottomWidth: 1,
-                    borderBottomColor: '#F3F4F6',
+                    borderBottomColor: colors.border,
                 },
+                headerTintColor: colors.text,
                 headerTitleAlign: 'center',
                 headerLeft: () => (
                     <TouchableOpacity
                         onPress={() => router.push('/(tabs)/dashboard')}
                         className="pl-6"
                     >
-                        <Image
-                            source={require('../../assets/icon.png')}
-                            className="w-10 h-10 rounded-xl"
-                            resizeMode="contain"
-                        />
+                        <Logo width={40} height={40} />
                     </TouchableOpacity>
                 ),
                 headerRight: () => (
@@ -43,7 +44,7 @@ export default function TabLayout() {
                         onPress={() => router.push('/settings')}
                         className="pr-6 p-2"
                     >
-                        <Settings size={26} color="#1F2937" />
+                        <Settings size={26} color={colors.text} />
                     </TouchableOpacity>
                 ),
                 tabBarLabelStyle: {

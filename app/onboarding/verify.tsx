@@ -4,10 +4,14 @@ import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Shield, ChevronLeft, Camera, Check, Upload, Info } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
+// @ts-ignore - Using legacy API for compatibility
+import * as FileSystem from 'expo-file-system/legacy';
 import { supabase } from '../../lib/supabase';
+import { useTheme } from '../../context/ThemeContext';
 
 export default function VerificationScreen() {
     const router = useRouter();
+    const { colors } = useTheme();
     const [aadhaar, setAadhaar] = useState('');
     const [aadhaarFront, setAadhaarFront] = useState<string | null>(null);
     const [aadhaarBack, setAadhaarBack] = useState<string | null>(null);
@@ -27,24 +31,49 @@ export default function VerificationScreen() {
         }
     };
 
+    // Helper to convert base64 to ArrayBuffer
+    const base64ToArrayBuffer = (base64: string): ArrayBuffer => {
+        const binaryString = atob(base64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes.buffer;
+    };
+
     const uploadImage = async (uri: string, prefix: string = 'image') => {
         try {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) throw new Error('Not authenticated');
 
-            const fileName = `${prefix}-${Date.now()}.jpg`;
+            const fileName = `${prefix}-${Date.now()}-${Math.random().toString(36).substring(7)}.jpg`;
+            console.log('[DEBUG] Uploading:', fileName, 'URI:', uri);
 
-            const formData = new FormData();
-            formData.append('file', {
-                uri: uri,
-                name: fileName,
-                type: 'image/jpeg',
-            } as any);
+            let fileData: ArrayBuffer;
+            
+            // Handle local file URIs (file:// or content://)
+            if (uri.startsWith('file://') || uri.startsWith('content://') || uri.startsWith('ph://')) {
+                // Read file as base64 using expo-file-system
+                const base64 = await FileSystem.readAsStringAsync(uri, {
+                    encoding: 'base64' as any,
+                });
+                // Convert base64 to ArrayBuffer
+                fileData = base64ToArrayBuffer(base64);
+            } else if (uri.startsWith('http://') || uri.startsWith('https://')) {
+                // For remote URLs, fetch and convert to ArrayBuffer
+                const response = await fetch(uri);
+                const blob = await response.blob();
+                const arrayBuffer = await blob.arrayBuffer();
+                fileData = arrayBuffer;
+            } else {
+                throw new Error('Unsupported URI format');
+            }
 
             const { data, error } = await supabase.storage
                 .from('ekatraa2025')
-                .upload(fileName, formData, {
-                    contentType: 'image/jpeg'
+                .upload(fileName, fileData, {
+                    contentType: 'image/jpeg',
+                    upsert: false
                 });
 
             if (error) {
@@ -112,7 +141,7 @@ export default function VerificationScreen() {
     };
 
     return (
-        <SafeAreaView className="flex-1 bg-white">
+        <SafeAreaView className="flex-1" style={{ backgroundColor: colors.background }}>
             <View className="px-6 py-4 flex-row items-center border-b border-gray-50">
                 <TouchableOpacity onPress={() => router.back()} className="mr-4">
                     <ChevronLeft size={24} color="#1F2937" />

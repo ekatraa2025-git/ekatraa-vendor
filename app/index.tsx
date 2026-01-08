@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, Image, Animated, Dimensions, TouchableOpacity } from 'react-native';
+import { View, Text, Animated, Dimensions, TouchableOpacity } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
 import { useTranslation } from 'react-i18next';
 import '../lib/i18n';
-import { Languages } from 'lucide-react-native';
+import Logo from '../components/Logo';
+import { useTheme } from '../context/ThemeContext';
 
 const { width } = Dimensions.get('window');
 
@@ -15,9 +16,10 @@ const languages = [
     { code: 'or', name: 'Odia', native: 'ଓଡିଆ' },
 ];
 
-export default function SplashScreen() {
+function SplashScreen() {
     const router = useRouter();
-    const { t, i18n } = useTranslation();
+    const { t } = useTranslation();
+    const { colors } = useTheme();
     const fadeAnim = useRef(new Animated.Value(0)).current;
     const scaleAnim = useRef(new Animated.Value(0.3)).current;
     const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -58,20 +60,45 @@ export default function SplashScreen() {
     }, []);
 
     const checkSession = async () => {
+        // Set a maximum timeout to ensure we always navigate
+        const maxTimeout = setTimeout(() => {
+            console.warn('Session check timeout, navigating to login');
+            router.replace('/(auth)/login');
+        }, 5000);
+
         try {
-            const { data: { session } } = await supabase.auth.getSession();
-            // Short delay to show splash content
-            setTimeout(() => {
-                if (session) {
-                    router.replace('/(tabs)/dashboard');
-                } else {
+            if (supabase && supabase.auth) {
+                const sessionPromise = supabase.auth.getSession();
+                const timeoutPromise = new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error('Session check timeout')), 4000)
+                );
+                
+                const { data: { session }, error } = await Promise.race([
+                    sessionPromise,
+                    timeoutPromise
+                ]) as any;
+                
+                clearTimeout(maxTimeout);
+                // Short delay to show splash content
+                setTimeout(() => {
+                    if (session && !error) {
+                        router.replace('/(tabs)/dashboard');
+                    } else {
+                        router.replace('/(auth)/login');
+                    }
+                }, 2000);
+            } else {
+                clearTimeout(maxTimeout);
+                setTimeout(() => {
                     router.replace('/(auth)/login');
-                }
-            }, 3000);
+                }, 2000);
+            }
         } catch (error) {
+            clearTimeout(maxTimeout);
+            console.error('Session check error:', error);
             setTimeout(() => {
                 router.replace('/(auth)/login');
-            }, 3000);
+            }, 2000);
         }
     };
 
@@ -82,7 +109,7 @@ export default function SplashScreen() {
     ];
 
     return (
-        <SafeAreaView className="flex-1 bg-white items-center justify-center px-6">
+        <SafeAreaView className="flex-1 items-center justify-center px-6" style={{ backgroundColor: colors.background }}>
             <Animated.View
                 style={{
                     opacity: fadeAnim,
@@ -92,21 +119,14 @@ export default function SplashScreen() {
                 }}
                 className="items-center mb-12"
             >
-                <Image
-                    source={require('../assets/splash-icon.png')}
-                    style={{ width: width * 0.5, height: width * 0.5 }}
-                    resizeMode="contain"
-                />
+                <Logo width={width * 0.5} height={width * 0.5} />
             </Animated.View>
 
             <Animated.View
                 style={{ opacity: fadeAnim }}
                 className="items-center w-full"
             >
-                <Text className="text-4xl font-extrabold text-primary tracking-widest text-center">
-                    eKatRaa
-                </Text>
-                <Text className="text-xl font-bold text-accent-dark tracking-wider mt-1">
+                <Text className="text-xl font-bold tracking-wider mt-1" style={{ color: colors.text }}>
                     {t('vendor_app')}
                 </Text>
 
@@ -116,7 +136,7 @@ export default function SplashScreen() {
 
                 <View className="mt-8 px-4 w-full">
                     {taglines.map((tag, idx) => (
-                        <Text key={idx} className="text-accent text-center text-sm font-medium italic leading-5 mb-2">
+                        <Text key={idx} className="text-center text-sm font-medium italic leading-5 mb-2" style={{ color: colors.textSecondary }}>
                             "{tag.text}"
                         </Text>
                     ))}
@@ -125,3 +145,5 @@ export default function SplashScreen() {
         </SafeAreaView>
     );
 }
+
+export default SplashScreen;

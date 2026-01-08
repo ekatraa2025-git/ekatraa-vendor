@@ -1,7 +1,8 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 
-const resources = {
+// Default fallback translations (used until backend loads)
+const defaultResources = {
     en: {
         translation: {
             splash_tagline: "Celebrating Togetherness with Trust and Care",
@@ -30,7 +31,10 @@ const resources = {
             generate_receipt: "Generate Receipt",
             thank_you: "Thank You",
             settings: "Settings",
-            // Add more translations as needed
+            contact_support: "Contact Support",
+            phone_support: "Phone Support",
+            email_support: "Email Support",
+            support_hours: "Support Hours",
         }
     },
     hi: {
@@ -61,6 +65,10 @@ const resources = {
             generate_receipt: "रसीद जनरेट करें",
             thank_you: "धन्यवाद",
             settings: "सेटिंग्स",
+            contact_support: "सहायता से संपर्क करें",
+            phone_support: "फोन सहायता",
+            email_support: "ईमेल सहायता",
+            support_hours: "सहायता समय",
         }
     },
     or: {
@@ -91,19 +99,82 @@ const resources = {
             generate_receipt: "ରସିଦ ପ୍ରସ୍ତୁତ କରନ୍ତୁ",
             thank_you: "ଧନ୍ୟବାଦ",
             settings: "ସେଟିଂସଙ୍ଗ",
+            contact_support: "ସମର୍ଥନ ଯୋଗାଯୋଗ କରନ୍ତୁ",
+            phone_support: "ଫୋନ୍ ସମର୍ଥନ",
+            email_support: "ଇମେଲ୍ ସମର୍ଥନ",
+            support_hours: "ସମର୍ଥନ ସମୟ",
         }
     }
 };
 
-i18n
-    .use(initReactI18next)
-    .init({
-        resources,
-        lng: 'en', // default language
-        fallbackLng: 'en',
-        interpolation: {
-            escapeValue: false
+// Backend API URL for translations (update this to your actual backend URL)
+const TRANSLATIONS_API_URL = process.env.EXPO_PUBLIC_API_URL 
+    ? `${process.env.EXPO_PUBLIC_API_URL}/api/translations`
+    : null;
+
+// Function to load translations from backend
+export const loadTranslationsFromBackend = async () => {
+    if (!TRANSLATIONS_API_URL) {
+        console.log('No API URL configured, using default translations');
+        return;
+    }
+
+    try {
+        const response = await fetch(TRANSLATIONS_API_URL);
+        if (!response.ok) {
+            throw new Error('Failed to fetch translations');
         }
-    });
+        
+        const data = await response.json();
+        
+        // Update i18n resources with backend data
+        if (data.en) {
+            i18n.addResourceBundle('en', 'translation', data.en, true, true);
+        }
+        if (data.hi) {
+            i18n.addResourceBundle('hi', 'translation', data.hi, true, true);
+        }
+        if (data.or) {
+            i18n.addResourceBundle('or', 'translation', data.or, true, true);
+        }
+        
+        console.log('Translations loaded from backend');
+    } catch (error) {
+        console.warn('Failed to load translations from backend, using defaults:', error);
+    }
+};
+
+try {
+    if (!i18n.isInitialized) {
+        i18n
+            .use(initReactI18next)
+            .init({
+                resources: defaultResources,
+                lng: 'en', // default language
+                fallbackLng: 'en',
+                interpolation: {
+                    escapeValue: false
+                }
+            });
+        
+        // Attempt to load translations from backend (non-blocking)
+        loadTranslationsFromBackend();
+    }
+} catch (error) {
+    console.warn('i18n initialization failed:', error);
+    // Ensure i18n has basic structure even if init fails
+    if (!i18n.isInitialized) {
+        try {
+            i18n.init({
+                resources: defaultResources,
+                lng: 'en',
+                fallbackLng: 'en',
+                interpolation: { escapeValue: false }
+            });
+        } catch (e) {
+            console.warn('i18n fallback init also failed:', e);
+        }
+    }
+}
 
 export default i18n;

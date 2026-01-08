@@ -1,20 +1,29 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Image } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Image, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { FileText, Plus, ChevronRight, Search, Filter, Clock, CheckCircle2, AlertCircle } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
 import { useTranslation } from 'react-i18next';
+import { useTheme } from '../../context/ThemeContext';
 
 export default function QuotationsScreen() {
     const router = useRouter();
     const { t } = useTranslation();
+    const { colors } = useTheme();
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
     const [quotations, setQuotations] = useState<any[]>([]);
 
     useEffect(() => {
         fetchQuotations();
     }, []);
+
+    const onRefresh = async () => {
+        setRefreshing(true);
+        await fetchQuotations();
+        setRefreshing(false);
+    };
 
     const fetchQuotations = async () => {
         try {
@@ -24,7 +33,7 @@ export default function QuotationsScreen() {
 
             const { data, error } = await supabase
                 .from('quotations')
-                .select('*, customers(full_name, avatar_url)')
+                .select('*')
                 .eq('vendor_id', user.id)
                 .order('created_at', { ascending: false });
 
@@ -38,17 +47,35 @@ export default function QuotationsScreen() {
     };
 
     const getStatusColor = (status: string) => {
-        switch (status) {
+        switch (status?.toLowerCase()) {
             case 'pending': return '#F59E0B';
+            case 'submitted': return '#3B82F6';
             case 'accepted': return '#10B981';
+            case 'confirmed': return '#10B981';
             case 'rejected': return '#EF4444';
+            case 'declined': return '#EF4444';
             case 'expired': return '#6B7280';
+            case 'cancelled': return '#6B7280';
             default: return '#6B7280';
         }
     };
 
+    const getStatusIcon = (status: string) => {
+        switch (status?.toLowerCase()) {
+            case 'submitted':
+            case 'accepted':
+            case 'confirmed':
+                return <CheckCircle2 size={14} color={getStatusColor(status)} />;
+            case 'rejected':
+            case 'declined':
+                return <AlertCircle size={14} color={getStatusColor(status)} />;
+            default:
+                return <Clock size={14} color={getStatusColor(status)} />;
+        }
+    };
+
     return (
-        <SafeAreaView className="flex-1 bg-white">
+        <SafeAreaView className="flex-1" style={{ backgroundColor: colors.background }}>
             <View className="px-6 py-4 flex-row justify-between items-center">
                 <View>
                     <Text className="text-3xl font-extrabold text-accent-dark">Quotations</Text>
@@ -70,7 +97,18 @@ export default function QuotationsScreen() {
                 </View>
             </View>
 
-            <ScrollView className="px-6 pb-8" showsVerticalScrollIndicator={false}>
+            <ScrollView 
+                className="px-6 pb-8" 
+                showsVerticalScrollIndicator={false}
+                refreshControl={
+                    <RefreshControl
+                        refreshing={refreshing}
+                        onRefresh={onRefresh}
+                        colors={['#FF6B00']}
+                        tintColor="#FF6B00"
+                    />
+                }
+            >
                 {loading ? (
                     <View className="py-20">
                         <ActivityIndicator size="large" color="#FF6B00" />
@@ -85,49 +123,61 @@ export default function QuotationsScreen() {
                             <View className="flex-row justify-between items-start mb-4">
                                 <View className="bg-surface px-3 py-1.5 rounded-full border border-gray-50">
                                     <Text className="text-[10px] font-bold text-accent tracking-widest uppercase">
-                                        #QT-{item.id.slice(0, 8).toUpperCase()}
+                                        #QT-{item.id?.slice(0, 8)?.toUpperCase() || 'N/A'}
                                     </Text>
                                 </View>
                                 <View
-                                    className="px-3 py-1 rounded-full"
+                                    className="px-3 py-1.5 rounded-full flex-row items-center"
                                     style={{ backgroundColor: `${getStatusColor(item.status)}15` }}
                                 >
+                                    {getStatusIcon(item.status)}
                                     <Text
-                                        className="text-[10px] font-extrabold uppercase tracking-widest"
+                                        className="text-[10px] font-extrabold uppercase tracking-widest ml-1.5"
                                         style={{ color: getStatusColor(item.status) }}
                                     >
-                                        {item.status}
+                                        {item.status || 'pending'}
                                     </Text>
                                 </View>
                             </View>
 
-                            <Text className="text-xl font-extrabold text-accent-dark mb-2">{item.service_name}</Text>
+                            <Text className="text-xl font-extrabold text-accent-dark mb-2">{item.service_name || item.service_type || 'Service'}</Text>
+                            
+                            {item.customer_name && (
+                                <Text className="text-accent text-sm font-medium mb-2">Customer: {item.customer_name}</Text>
+                            )}
 
-                            <View className="flex-row items-center mb-4">
+                            <View className="flex-row items-center mb-2">
                                 <Clock size={14} color="#9CA3AF" />
                                 <Text className="text-accent text-xs font-bold ml-1">
-                                    {new Date(item.valid_until).toLocaleDateString()}
+                                    Quotation: {item.quotation_date ? new Date(item.quotation_date).toLocaleDateString() : 'N/A'}
                                 </Text>
                             </View>
+
+                            {item.delivery_date && (
+                                <View className="flex-row items-center mb-2">
+                                    <Clock size={14} color="#9CA3AF" />
+                                    <Text className="text-accent text-xs font-bold ml-1">
+                                        Delivery: {new Date(item.delivery_date).toLocaleDateString()}
+                                    </Text>
+                                </View>
+                            )}
+
+                            {item.venue_address && (
+                                <View className="mb-2">
+                                    <Text className="text-accent text-xs font-medium" numberOfLines={1}>
+                                        Venue: {item.venue_address}
+                                    </Text>
+                                </View>
+                            )}
 
                             <View className="h-[1px] bg-gray-50 w-full mb-4" />
 
                             <View className="flex-row justify-between items-center">
-                                <View className="flex-row items-center">
-                                    <View className="w-8 h-8 rounded-full bg-gray-100 items-center justify-center overflow-hidden mr-2">
-                                        {item.customers?.avatar_url ? (
-                                            <Image source={{ uri: item.customers.avatar_url }} className="w-full h-full" />
-                                        ) : (
-                                            <FileText size={16} color="#9CA3AF" />
-                                        )}
-                                    </View>
-                                    <View>
-                                        <Text className="text-accent-dark font-bold text-xs">{item.customers?.full_name || 'Anonymous Client'}</Text>
-                                        <Text className="text-accent text-[10px]">Recipient</Text>
-                                    </View>
+                                <View>
+                                    <Text className="text-accent text-[10px] font-bold uppercase">Amount</Text>
                                 </View>
                                 <View>
-                                    <Text className="text-primary font-extrabold text-lg">₹{item.total_amount}</Text>
+                                    <Text className="text-primary font-extrabold text-lg">₹{item.total_amount || item.amount || '0'}</Text>
                                 </View>
                             </View>
                         </TouchableOpacity>

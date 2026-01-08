@@ -8,6 +8,56 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { supabase } from '../../lib/supabase';
 import { useTranslation } from 'react-i18next';
+import { useTheme } from '../../context/ThemeContext';
+// @ts-ignore - Using legacy API for compatibility
+import * as FileSystem from 'expo-file-system/legacy';
+
+// Helper function to get signed URL from file path or existing URL
+const getImageUrl = async (urlOrPath: string | null | undefined): Promise<string> => {
+    if (!urlOrPath) return '';
+    
+    try {
+        let fileName = urlOrPath;
+        
+        // If it's already a full URL, extract the filename
+        if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
+            // Extract filename from Supabase storage URL
+            const urlMatch = urlOrPath.match(/\/ekatraa2025\/([^/?]+)/);
+            if (urlMatch && urlMatch[1]) {
+                fileName = urlMatch[1];
+            } else {
+                // If it's already a signed URL with token, return as-is
+                if (urlOrPath.includes('token=')) {
+                    return urlOrPath;
+                }
+                // Otherwise try to extract filename from end of URL
+                fileName = urlOrPath.split('/').pop()?.split('?')[0] || urlOrPath;
+            }
+        } else if (urlOrPath.includes('/')) {
+            // Extract filename from path
+            fileName = urlOrPath.split('/').pop() || urlOrPath;
+        }
+        
+        // Generate signed URL (valid for 24 hours for better caching)
+        const { data, error } = await supabase.storage
+            .from('ekatraa2025')
+            .createSignedUrl(fileName, 86400); // 24 hours expiry for faster loading
+
+        if (error) {
+            console.error('[SIGNED URL ERROR]', error, 'fileName:', fileName);
+            // Fallback to public URL
+            const { data: { publicUrl } } = supabase.storage
+                .from('ekatraa2025')
+                .getPublicUrl(fileName);
+            return publicUrl;
+        }
+
+        return data.signedUrl;
+    } catch (error) {
+        console.error('[GET IMAGE URL ERROR]', error);
+        return urlOrPath; // Return original if all fails
+    }
+};
 
 const MOCK_LOCATIONS = [
     'Indiranagar, Bengaluru, Karnataka, India',
@@ -24,10 +74,13 @@ const MOCK_LOCATIONS = [
 export default function OnboardingScreen() {
     const router = useRouter();
     const { t } = useTranslation();
+    const { colors } = useTheme();
     const { phone: phoneParam } = useLocalSearchParams<{ phone: string }>();
     const [step, setStep] = useState(1);
     const [profileImage, setProfileImage] = useState<string | null>(null);
     const [serviceImage, setServiceImage] = useState<string | null>(null);
+    const [profileImageUrl, setProfileImageUrl] = useState<string>('');
+    const [serviceImageUrl, setServiceImageUrl] = useState<string>('');
     const [loading, setLoading] = useState(false);
     const [fetching, setFetching] = useState(false);
     const [locationQuery, setLocationQuery] = useState('');
@@ -87,7 +140,14 @@ export default function OnboardingScreen() {
                     address: vendor.address || prev.address,
                 }));
                 if (vendor.address) setLocationQuery(vendor.address);
-                if (vendor.logo_url) setProfileImage(vendor.logo_url);
+                if (vendor.logo_url) {
+                    setProfileImage(vendor.logo_url);
+                    // Load signed URL for profile image
+                    if (!vendor.logo_url.startsWith('file') && !vendor.logo_url.startsWith('content')) {
+                        const signedUrl = await getImageUrl(vendor.logo_url);
+                        setProfileImageUrl(signedUrl);
+                    }
+                }
             }
 
             const { count } = await supabase
@@ -155,9 +215,24 @@ export default function OnboardingScreen() {
         });
 
         if (!result.canceled) {
-            if (type === 'profile') setProfileImage(result.assets[0].uri);
-            else setServiceImage(result.assets[0].uri);
+            if (type === 'profile') {
+                setProfileImage(result.assets[0].uri);
+                setProfileImageUrl(result.assets[0].uri); // For local images, use URI directly
+            } else {
+                setServiceImage(result.assets[0].uri);
+                setServiceImageUrl(result.assets[0].uri); // For local images, use URI directly
+            }
         }
+    };
+
+    // Helper to convert base64 to ArrayBuffer
+    const base64ToArrayBuffer = (base64: string): ArrayBuffer => {
+        const binaryString = atob(base64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes.buffer;
     };
 
     const uploadImage = async (uri: string, prefix: string = 'image') => {
@@ -165,19 +240,34 @@ export default function OnboardingScreen() {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) throw new Error('Not authenticated');
 
-            const fileName = `${prefix}-${Date.now()}.jpg`;
+            const fileName = `${prefix}-${Date.now()}-${Math.random().toString(36).substring(7)}.jpg`;
+            console.log('[DEBUG] Uploading:', fileName, 'URI:', uri);
 
-            const formData = new FormData();
-            formData.append('file', {
-                uri: uri,
-                name: fileName,
-                type: 'image/jpeg',
-            } as any);
+            let fileData: ArrayBuffer;
+            
+            // Handle local file URIs (file:// or content://)
+            if (uri.startsWith('file://') || uri.startsWith('content://') || uri.startsWith('ph://')) {
+                // Read file as base64 using expo-file-system
+                const base64 = await FileSystem.readAsStringAsync(uri, {
+                    encoding: 'base64' as any,
+                });
+                // Convert base64 to ArrayBuffer
+                fileData = base64ToArrayBuffer(base64);
+            } else if (uri.startsWith('http://') || uri.startsWith('https://')) {
+                // For remote URLs, fetch and convert to ArrayBuffer
+                const response = await fetch(uri);
+                const blob = await response.blob();
+                const arrayBuffer = await blob.arrayBuffer();
+                fileData = arrayBuffer;
+            } else {
+                throw new Error('Unsupported URI format');
+            }
 
             const { data, error } = await supabase.storage
                 .from('ekatraa2025')
-                .upload(fileName, formData, {
-                    contentType: 'image/jpeg'
+                .upload(fileName, fileData, {
+                    contentType: 'image/jpeg',
+                    upsert: false
                 });
 
             if (error) {
@@ -185,11 +275,8 @@ export default function OnboardingScreen() {
                 throw error;
             }
 
-            const { data: { publicUrl } } = supabase.storage
-                .from('ekatraa2025')
-                .getPublicUrl(fileName);
-
-            return publicUrl;
+            // Return just the filename - we'll generate signed URLs when displaying
+            return fileName;
         } catch (error: any) {
             console.error('[UPLOAD CATCH]', error);
             throw error;
@@ -208,11 +295,17 @@ export default function OnboardingScreen() {
                 let finalLogoUrl = profileImage;
                 if (profileImage && (profileImage.startsWith('file:') || profileImage.startsWith('content:'))) {
                     finalLogoUrl = await uploadImage(profileImage, 'logo');
+                } else if (profileImage && !profileImage.startsWith('http')) {
+                    // If it's already a filename, keep it
+                    finalLogoUrl = profileImage;
                 }
 
                 let finalServiceImageUrl = serviceImage;
                 if (serviceImage && (serviceImage.startsWith('file:') || serviceImage.startsWith('content:'))) {
                     finalServiceImageUrl = await uploadImage(serviceImage, 'service');
+                } else if (serviceImage && !serviceImage.startsWith('http')) {
+                    // If it's already a filename, keep it
+                    finalServiceImageUrl = serviceImage;
                 }
 
                 const { error: vendorError } = await supabase
@@ -309,8 +402,23 @@ export default function OnboardingScreen() {
                     onPress={() => pickImage('profile')}
                     className="w-36 h-36 bg-surface rounded-3xl border-2 border-dashed border-gray-200 items-center justify-center overflow-hidden shadow-sm"
                 >
-                    {profileImage ? (
-                        <Image source={{ uri: profileImage }} className="w-full h-full" />
+                    {profileImageUrl ? (
+                        <Image
+                            source={{ uri: profileImageUrl }}
+                            className="w-full h-full"
+                            resizeMode="cover"
+                            onError={(e) => {
+                                console.error('[IMAGE LOAD ERROR] Onboarding Profile:', e.nativeEvent.error, 'URI:', profileImageUrl);
+                                setProfileImageUrl('');
+                            }}
+                        />
+                    ) : profileImage && (profileImage.startsWith('file') || profileImage.startsWith('content')) ? (
+                        <Image
+                            source={{ uri: profileImage }}
+                            className="w-full h-full"
+                            resizeMode="cover"
+                            onError={(e) => console.error('[IMAGE LOAD ERROR] Onboarding Profile Picked:', e.nativeEvent.error, 'URI:', profileImage)}
+                        />
                     ) : (
                         <View className="items-center">
                             <Camera size={40} color="#FF6B00" strokeWidth={1.5} />
@@ -448,8 +556,27 @@ export default function OnboardingScreen() {
                     <Text className="text-accent text-base mb-8">You have {serviceCount} service{serviceCount > 1 ? 's' : ''} active</Text>
 
                     <View className="bg-green-50 border-2 border-green-100 rounded-3xl p-10 items-center mb-8 shadow-sm">
-                        <View className="w-24 h-24 bg-green-100 rounded-full items-center justify-center mb-6">
-                            <Check size={48} color="#059669" strokeWidth={3} />
+                        <View className="w-32 h-32 rounded-full border-4 border-surface overflow-hidden bg-surface items-center justify-center mb-6">
+                            {profileImageUrl ? (
+                                <Image
+                                    source={{ uri: profileImageUrl }}
+                                    className="w-full h-full"
+                                    resizeMode="cover"
+                                    onError={(e) => {
+                                        console.error('[IMAGE LOAD ERROR] Onboarding Vendor Logo:', e.nativeEvent.error, 'URI:', profileImageUrl);
+                                        setProfileImageUrl('');
+                                    }}
+                                />
+                            ) : profileImage && (profileImage.startsWith('file') || profileImage.startsWith('content')) ? (
+                                <Image
+                                    source={{ uri: profileImage }}
+                                    className="w-full h-full"
+                                    resizeMode="cover"
+                                    onError={(e) => console.error('[IMAGE LOAD ERROR] Onboarding Vendor Logo Picked:', e.nativeEvent.error, 'URI:', profileImage)}
+                                />
+                            ) : (
+                                <Check size={48} color="#059669" strokeWidth={3} />
+                            )}
                         </View>
                         <Text className="text-green-900 font-extrabold text-2xl mb-2">Profile Ready!</Text>
                         <Text className="text-green-700 text-center text-base font-medium leading-6">
@@ -479,8 +606,23 @@ export default function OnboardingScreen() {
                         onPress={() => pickImage('service')}
                         className="bg-white border-2 border-dashed border-gray-200 rounded-3xl p-3 mb-8 items-center overflow-hidden shadow-sm"
                     >
-                        {serviceImage ? (
-                            <Image source={{ uri: serviceImage }} className="w-full h-56 rounded-2xl" resizeMode="cover" />
+                        {serviceImageUrl ? (
+                            <Image
+                                source={{ uri: serviceImageUrl }}
+                                className="w-full h-56 rounded-2xl"
+                                resizeMode="cover"
+                                onError={(e) => {
+                                    console.error('[IMAGE LOAD ERROR] Onboarding Service:', e.nativeEvent.error, 'URI:', serviceImageUrl);
+                                    setServiceImageUrl('');
+                                }}
+                            />
+                        ) : serviceImage && (serviceImage.startsWith('file') || serviceImage.startsWith('content')) ? (
+                            <Image
+                                source={{ uri: serviceImage }}
+                                className="w-full h-56 rounded-2xl"
+                                resizeMode="cover"
+                                onError={(e) => console.error('[IMAGE LOAD ERROR] Onboarding Service Picked:', e.nativeEvent.error, 'URI:', serviceImage)}
+                            />
                         ) : (
                             <View className="py-12 items-center">
                                 <View className="w-20 h-20 bg-primary/10 rounded-3xl items-center justify-center mb-5">
@@ -534,16 +676,17 @@ export default function OnboardingScreen() {
     );
 
     return (
-        <SafeAreaView className="flex-1 bg-white">
-            <View className="px-6 pt-4 flex-row justify-between items-center bg-white">
-                <Text className="text-accent-dark font-extrabold text-sm tracking-widest uppercase">
+        <SafeAreaView className="flex-1" style={{ backgroundColor: colors.background }}>
+            <View className="px-6 pt-4 flex-row justify-between items-center" style={{ backgroundColor: colors.background }}>
+                <Text className="font-extrabold text-sm tracking-widest uppercase" style={{ color: colors.text }}>
                     Registration • Step {step}/3
                 </Text>
                 <View className="flex-row">
                     {[1, 2, 3].map((s) => (
                         <View
                             key={s}
-                            className={`h-1.5 rounded-full mx-1 ${step >= s ? 'w-8 bg-primary' : 'w-4 bg-gray-100'}`}
+                            className={`h-1.5 rounded-full mx-1 ${step >= s ? 'w-8 bg-primary' : 'w-4'}`}
+                            style={{ backgroundColor: step >= s ? '#FF6B00' : colors.border }}
                         />
                     ))}
                 </View>

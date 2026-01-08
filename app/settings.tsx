@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ChevronLeft, Moon, Bell, Languages, X, Check, Sun } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
+import { useTheme } from '../context/ThemeContext';
 
 const languages = [
     { code: 'en', name: 'English', native: 'English' },
@@ -14,10 +15,8 @@ const languages = [
 export default function SettingsScreen() {
     const router = useRouter();
     const { t, i18n } = useTranslation();
-    const [isDarkMode, setIsDarkMode] = useState(false);
+    const { isDarkMode, toggleDarkMode, colors } = useTheme();
     const [showLanguageModal, setShowLanguageModal] = useState(false);
-
-    const toggleDarkMode = () => setIsDarkMode(!isDarkMode);
 
     const handleLanguageSelect = (langCode: string) => {
         i18n.changeLanguage(langCode);
@@ -25,28 +24,28 @@ export default function SettingsScreen() {
     };
 
     return (
-        <SafeAreaView className="flex-1 bg-white">
+        <SafeAreaView className="flex-1" style={{ backgroundColor: colors.background }}>
             <View className="px-6 py-4 flex-row items-center">
                 <TouchableOpacity onPress={() => router.back()} className="mr-4">
-                    <ChevronLeft size={24} color="#1F2937" />
+                    <ChevronLeft size={24} color={colors.text} />
                 </TouchableOpacity>
-                <Text className="text-2xl font-bold text-accent-dark">{t('settings', 'Settings')}</Text>
+                <Text className="text-2xl font-bold" style={{ color: colors.text }}>{t('settings', 'Settings')}</Text>
             </View>
 
             <ScrollView className="flex-1 px-6">
                 <View className="mt-6">
-                    <Text className="text-sm font-bold text-accent uppercase tracking-widest mb-4">Preferences</Text>
+                    <Text className="text-sm font-bold uppercase tracking-widest mb-4" style={{ color: colors.textSecondary }}>Preferences</Text>
 
-                    <View className="bg-surface rounded-3xl overflow-hidden">
+                    <View className="rounded-3xl overflow-hidden" style={{ backgroundColor: colors.surface }}>
                         {/* Color Mode */}
-                        <View className="flex-row items-center justify-between p-5 border-b border-gray-50">
+                        <View className="flex-row items-center justify-between p-5" style={{ borderBottomWidth: 1, borderBottomColor: colors.border }}>
                             <View className="flex-row items-center">
                                 <View className="w-10 h-10 bg-blue-50 rounded-xl items-center justify-center mr-4">
                                     {isDarkMode ? <Moon size={20} color="#3B82F6" /> : <Sun size={20} color="#3B82F6" />}
                                 </View>
                                 <View>
-                                    <Text className="text-accent-dark font-bold text-base">Dark Mode</Text>
-                                    <Text className="text-accent text-xs">Toggle dark/light theme</Text>
+                                    <Text className="font-bold text-base" style={{ color: colors.text }}>Dark Mode</Text>
+                                    <Text className="text-xs" style={{ color: colors.textSecondary }}>Toggle dark/light theme</Text>
                                 </View>
                             </View>
                             <Switch
@@ -60,21 +59,22 @@ export default function SettingsScreen() {
                         {/* Language */}
                         <TouchableOpacity
                             onPress={() => setShowLanguageModal(true)}
-                            className="flex-row items-center justify-between p-5 border-b border-gray-50"
+                            className="flex-row items-center justify-between p-5"
+                            style={{ borderBottomWidth: 1, borderBottomColor: colors.border }}
                         >
                             <View className="flex-row items-center">
                                 <View className="w-10 h-10 bg-orange-50 rounded-xl items-center justify-center mr-4">
                                     <Languages size={20} color="#FF6B00" />
                                 </View>
                                 <View>
-                                    <Text className="text-accent-dark font-bold text-base">Language</Text>
-                                    <Text className="text-accent text-xs">
+                                    <Text className="font-bold text-base" style={{ color: colors.text }}>Language</Text>
+                                    <Text className="text-xs" style={{ color: colors.textSecondary }}>
                                         {languages.find(l => l.code === i18n.language)?.native || 'Select language'}
                                     </Text>
                                 </View>
                             </View>
-                            <View className="bg-gray-100 px-3 py-1 rounded-full">
-                                <Text className="text-accent-dark font-bold text-[10px] uppercase">
+                            <View className="px-3 py-1 rounded-full" style={{ backgroundColor: isDarkMode ? colors.border : '#F3F4F6' }}>
+                                <Text className="font-bold text-[10px] uppercase" style={{ color: colors.text }}>
                                     {i18n.language.toUpperCase()}
                                 </Text>
                             </View>
@@ -90,17 +90,17 @@ export default function SettingsScreen() {
                                     <Bell size={20} color="#8B5CF6" />
                                 </View>
                                 <View>
-                                    <Text className="text-accent-dark font-bold text-base">Notifications</Text>
-                                    <Text className="text-accent text-xs">System notification settings</Text>
+                                    <Text className="font-bold text-base" style={{ color: colors.text }}>Notifications</Text>
+                                    <Text className="text-xs" style={{ color: colors.textSecondary }}>System notification settings</Text>
                                 </View>
                             </View>
-                            <ChevronLeft size={20} color="#D1D5DB" style={{ transform: [{ rotate: '180deg' }] }} />
+                            <ChevronLeft size={20} color={colors.textSecondary} style={{ transform: [{ rotate: '180deg' }] }} />
                         </TouchableOpacity>
                     </View>
                 </View>
 
                 <View className="mt-10 items-center pb-12">
-                    <Text className="text-accent-light text-[10px] font-bold uppercase tracking-widest">Global Ekatraa Settings</Text>
+                    <Text className="text-[10px] font-bold uppercase tracking-widest" style={{ color: colors.accentLight }}>Global Ekatraa Settings</Text>
                 </View>
             </ScrollView>
 
@@ -112,17 +112,18 @@ export default function SettingsScreen() {
                 onRequestClose={() => setShowLanguageModal(false)}
             >
                 <View className="flex-1 justify-center items-center bg-black/50 px-6">
-                    <View className="bg-white w-full rounded-[40px] p-8 shadow-2xl">
+                    <View className="w-full rounded-[40px] p-8 shadow-2xl" style={{ backgroundColor: colors.background }}>
                         <View className="flex-row justify-between items-center mb-6">
                             <View>
-                                <Text className="text-2xl font-extrabold text-accent-dark">{t('select_language')}</Text>
-                                <Text className="text-accent text-xs font-bold uppercase tracking-widest mt-1">App Preference</Text>
+                                <Text className="text-2xl font-extrabold" style={{ color: colors.text }}>{t('select_language')}</Text>
+                                <Text className="text-xs font-bold uppercase tracking-widest mt-1" style={{ color: colors.textSecondary }}>App Preference</Text>
                             </View>
                             <TouchableOpacity
                                 onPress={() => setShowLanguageModal(false)}
-                                className="w-10 h-10 bg-gray-50 rounded-full items-center justify-center"
+                                className="w-10 h-10 rounded-full items-center justify-center"
+                                style={{ backgroundColor: colors.surface }}
                             >
-                                <X size={20} color="#4B5563" />
+                                <X size={20} color={colors.textSecondary} />
                             </TouchableOpacity>
                         </View>
 
@@ -131,25 +132,29 @@ export default function SettingsScreen() {
                                 <TouchableOpacity
                                     key={lang.code}
                                     onPress={() => handleLanguageSelect(lang.code)}
-                                    className={`flex-row items-center justify-between p-5 rounded-3xl border-2 ${i18n.language === lang.code
-                                        ? 'bg-primary/5 border-primary shadow-sm'
-                                        : 'bg-white border-gray-100'
-                                        } mb-3`}
+                                    className={`flex-row items-center justify-between p-5 rounded-3xl border-2 mb-3`}
+                                    style={{
+                                        backgroundColor: i18n.language === lang.code ? 'rgba(255, 107, 0, 0.05)' : colors.background,
+                                        borderColor: i18n.language === lang.code ? colors.primary : colors.border
+                                    }}
                                 >
                                     <View className="flex-row items-center">
-                                        <View className={`w-12 h-12 rounded-2xl items-center justify-center mr-4 ${i18n.language === lang.code ? 'bg-primary' : 'bg-gray-100'
-                                            }`}>
-                                            <Text className={`font-bold text-lg ${i18n.language === lang.code ? 'text-white' : 'text-gray-500'
-                                                }`}>
+                                        <View className={`w-12 h-12 rounded-2xl items-center justify-center mr-4`}
+                                            style={{ backgroundColor: i18n.language === lang.code ? colors.primary : colors.surface }}
+                                        >
+                                            <Text className="font-bold text-lg"
+                                                style={{ color: i18n.language === lang.code ? '#FFFFFF' : colors.textSecondary }}
+                                            >
                                                 {lang.native[0]}
                                             </Text>
                                         </View>
                                         <View>
-                                            <Text className={`font-bold text-lg ${i18n.language === lang.code ? 'text-primary' : 'text-accent-dark'
-                                                }`}>
+                                            <Text className="font-bold text-lg"
+                                                style={{ color: i18n.language === lang.code ? colors.primary : colors.text }}
+                                            >
                                                 {lang.native}
                                             </Text>
-                                            <Text className="text-accent text-xs font-bold">{lang.name}</Text>
+                                            <Text className="text-xs font-bold" style={{ color: colors.textSecondary }}>{lang.name}</Text>
                                         </View>
                                     </View>
                                     {i18n.language === lang.code && (
@@ -163,9 +168,10 @@ export default function SettingsScreen() {
 
                         <TouchableOpacity
                             onPress={() => setShowLanguageModal(false)}
-                            className="mt-8 py-5 items-center justify-center bg-black rounded-3xl"
+                            className="mt-8 py-5 items-center justify-center rounded-3xl"
+                            style={{ backgroundColor: isDarkMode ? colors.text : '#000000' }}
                         >
-                            <Text className="text-white font-extrabold text-lg">Close</Text>
+                            <Text className="font-extrabold text-lg" style={{ color: isDarkMode ? colors.background : '#FFFFFF' }}>Close</Text>
                         </TouchableOpacity>
                     </View>
                 </View>

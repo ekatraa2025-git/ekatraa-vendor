@@ -1,12 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Image, FlatList, ActivityIndicator, Modal, TextInput, Alert } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Image, FlatList, ActivityIndicator, Modal, TextInput, Alert, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Plus, Edit3, Trash2, Eye, Star, ChevronRight, X, Check } from 'lucide-react-native';
+import { Plus, Edit3, Trash2, Eye, Star, ChevronRight, X, Check, Store } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
+import { useTheme } from '../../context/ThemeContext';
+// @ts-ignore - Using legacy API for compatibility
+import * as FileSystem from 'expo-file-system/legacy';
 
 import * as ImagePicker from 'expo-image-picker';
 
 export default function ServicesScreen() {
+    const { colors } = useTheme();
     const [loading, setLoading] = useState(true);
     const [services, setServices] = useState<any[]>([]);
     const [editModalVisible, setEditModalVisible] = useState(false);
@@ -16,31 +20,133 @@ export default function ServicesScreen() {
     const [selectedImage, setSelectedImage] = useState<string | null>(null);
     const [previewModalVisible, setPreviewModalVisible] = useState(false);
     const [previewServiceData, setPreviewServiceData] = useState<any>(null);
+    const [refreshing, setRefreshing] = useState(false);
+    // Cache for image URLs to avoid repeated API calls
+    const imageUrlCache: { [key: string]: string } = {};
 
     useEffect(() => {
         console.log('[DEBUG] ServicesScreen mounted');
         fetchServices();
     }, []);
 
+    const onRefresh = async () => {
+        setRefreshing(true);
+        await fetchServices();
+        setRefreshing(false);
+    };
+
+    // Helper function to get signed URL from file path or existing URL
+    const getImageUrl = async (urlOrPath: string | null | undefined): Promise<string> => {
+        if (!urlOrPath) return '';
+        
+        try {
+            // Check cache first
+            if (imageUrlCache[urlOrPath]) {
+                return imageUrlCache[urlOrPath];
+            }
+
+            let fileName = urlOrPath;
+            
+            // If it's already a full URL, extract the filename
+            if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
+                // If it's already a signed URL with token, return as-is
+                if (urlOrPath.includes('token=')) {
+                    imageUrlCache[urlOrPath] = urlOrPath;
+                    return urlOrPath;
+                }
+                // Extract filename from Supabase storage URL
+                // Format: https://...supabase.co/storage/v1/object/public/ekatraa2025/filename.jpg
+                const urlMatch = urlOrPath.match(/\/ekatraa2025\/([^/?]+)/);
+                if (urlMatch && urlMatch[1]) {
+                    fileName = urlMatch[1];
+                } else {
+                    // Otherwise try to extract filename from end of URL
+                    fileName = urlOrPath.split('/').pop()?.split('?')[0] || urlOrPath;
+                }
+            } else if (urlOrPath.includes('/')) {
+                // Extract filename from path
+                fileName = urlOrPath.split('/').pop() || urlOrPath;
+            }
+            
+            // Generate signed URL (valid for 24 hours for better caching)
+            try {
+                const { data, error } = await supabase.storage
+                    .from('ekatraa2025')
+                    .createSignedUrl(fileName, 86400); // 24 hours expiry for faster loading
+
+                if (error) {
+                    console.error('[SIGNED URL ERROR]', error, 'fileName:', fileName);
+                    // Fallback to public URL
+                    const { data: { publicUrl } } = supabase.storage
+                        .from('ekatraa2025')
+                        .getPublicUrl(fileName);
+                    imageUrlCache[urlOrPath] = publicUrl;
+                    return publicUrl;
+                }
+
+                if (data && data.signedUrl) {
+                    imageUrlCache[urlOrPath] = data.signedUrl;
+                    return data.signedUrl;
+                }
+            } catch (storageError: any) {
+                console.error('[STORAGE API ERROR]', storageError);
+                // Fallback to public URL
+                const { data: { publicUrl } } = supabase.storage
+                    .from('ekatraa2025')
+                    .getPublicUrl(fileName);
+                return publicUrl;
+            }
+
+            return urlOrPath; // Return original if all fails
+        } catch (error) {
+            console.error('[GET IMAGE URL ERROR]', error);
+            return urlOrPath; // Return original if all fails
+        }
+    };
+
+    // Helper to convert base64 to ArrayBuffer
+    const base64ToArrayBuffer = (base64: string): ArrayBuffer => {
+        const binaryString = atob(base64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes.buffer;
+    };
+
     const uploadImage = async (uri: string, prefix: string = 'image') => {
         try {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) throw new Error('Not authenticated');
 
-            const fileName = `${prefix}-${Date.now()}.jpg`;
-            console.log('[DEBUG] Uploading:', fileName);
+            const fileName = `${prefix}-${Date.now()}-${Math.random().toString(36).substring(7)}.jpg`;
+            console.log('[DEBUG] Uploading:', fileName, 'URI:', uri);
 
-            const formData = new FormData();
-            formData.append('file', {
-                uri: uri,
-                name: fileName,
-                type: 'image/jpeg',
-            } as any);
+            let fileData: ArrayBuffer;
+            
+            // Handle local file URIs (file:// or content://)
+            if (uri.startsWith('file://') || uri.startsWith('content://') || uri.startsWith('ph://')) {
+                // Read file as base64 using expo-file-system
+                const base64 = await FileSystem.readAsStringAsync(uri, {
+                    encoding: 'base64' as any,
+                });
+                // Convert base64 to ArrayBuffer
+                fileData = base64ToArrayBuffer(base64);
+            } else if (uri.startsWith('http://') || uri.startsWith('https://')) {
+                // For remote URLs, fetch and convert to ArrayBuffer
+                const response = await fetch(uri);
+                const blob = await response.blob();
+                const arrayBuffer = await blob.arrayBuffer();
+                fileData = arrayBuffer;
+            } else {
+                throw new Error('Unsupported URI format');
+            }
 
             const { data, error } = await supabase.storage
                 .from('ekatraa2025')
-                .upload(fileName, formData, {
-                    contentType: 'image/jpeg'
+                .upload(fileName, fileData, {
+                    contentType: 'image/jpeg',
+                    upsert: false
                 });
 
             if (error) {
@@ -48,12 +154,9 @@ export default function ServicesScreen() {
                 throw error;
             }
 
-            const { data: { publicUrl } } = supabase.storage
-                .from('ekatraa2025')
-                .getPublicUrl(fileName);
-
-            console.log('[DEBUG] URL:', publicUrl);
-            return publicUrl;
+            console.log('[DEBUG] Upload successful:', fileName);
+            // Return just the filename - we'll generate signed URLs when displaying
+            return fileName;
         } catch (error: any) {
             console.error('[UPLOAD CATCH]', error);
             throw error;
@@ -110,7 +213,7 @@ export default function ServicesScreen() {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) return;
 
-            let imageUrls = editingService.image_urls || [];
+            let imageUrls = (editingService.image_urls || []).filter((uri: string) => uri && !uri.startsWith('file') && !uri.startsWith('content'));
             if (selectedImage) {
                 const uploadedUrl = await uploadImage(selectedImage, 'service');
                 imageUrls = [uploadedUrl];
@@ -192,6 +295,71 @@ export default function ServicesScreen() {
         setEditModalVisible(true);
     };
 
+    // Component to handle image loading with signed URLs
+    const ServiceImage = ({ imageUrl }: { imageUrl: string | null | undefined }) => {
+        const [displayUrl, setDisplayUrl] = useState<string>('');
+        const [loading, setLoading] = useState(true);
+
+        useEffect(() => {
+            const loadImage = async () => {
+                setLoading(true);
+                if (!imageUrl || imageUrl.startsWith('file') || imageUrl.startsWith('content')) {
+                    setLoading(false);
+                    return;
+                }
+                try {
+                    const url = await getImageUrl(imageUrl);
+                    if (url) {
+                        setDisplayUrl(url);
+                    }
+                } catch (error) {
+                    console.error('[SERVICE IMAGE LOAD ERROR]', error);
+                } finally {
+                    setLoading(false);
+                }
+            };
+            loadImage();
+        }, [imageUrl]);
+
+        if (!imageUrl) {
+            return (
+                <View className="w-full h-48 bg-gray-100 items-center justify-center">
+                    <View className="items-center">
+                        <Store size={40} color="#9CA3AF" />
+                        <Text className="text-accent text-xs mt-2 font-bold">No Image</Text>
+                    </View>
+                </View>
+            );
+        }
+
+        return (
+            <View className="w-full h-48 bg-gray-100 relative">
+                {loading ? (
+                    <View className="absolute inset-0 items-center justify-center bg-gray-100">
+                        <ActivityIndicator size="large" color="#FF6B00" />
+                    </View>
+                ) : displayUrl ? (
+                    <Image
+                        source={{ uri: displayUrl }}
+                        className="w-full h-full"
+                        resizeMode="cover"
+                        onError={(e) => {
+                            console.error('[IMAGE LOAD ERROR] Service:', e.nativeEvent.error, 'URI:', displayUrl);
+                            setDisplayUrl('');
+                        }}
+                    />
+                ) : (
+                    <View className="w-full h-full items-center justify-center bg-gray-100">
+                        <View className="items-center">
+                            <Store size={40} color="#9CA3AF" />
+                            <Text className="text-accent text-xs mt-2 font-bold">Image Not Available</Text>
+                        </View>
+                    </View>
+                )}
+            </View>
+        );
+    };
+
     const renderServiceCard = ({ item }: { item: any }) => (
         <TouchableOpacity
             activeOpacity={0.9}
@@ -199,10 +367,7 @@ export default function ServicesScreen() {
             className="bg-white border border-gray-100 rounded-[32px] overflow-hidden mb-6 shadow-sm"
         >
             <View className="relative">
-                <Image
-                    source={{ uri: item.image_urls?.[0] || 'https://images.unsplash.com/photo-1555244162-803834f70033?q=80&w=400&h=300&auto=format&fit=crop' }}
-                    className="w-full h-48"
-                />
+                <ServiceImage imageUrl={item.image_urls?.[0]} />
                 <View className="absolute top-4 right-4 bg-white/90 px-3 py-1 rounded-full flex-row items-center">
                     <Star size={12} color="#FF6B00" fill="#FF6B00" />
                     <Text className="text-accent-dark text-[10px] font-bold ml-1">4.8</Text>
@@ -252,14 +417,14 @@ export default function ServicesScreen() {
 
     if (loading) {
         return (
-            <SafeAreaView className="flex-1 bg-white items-center justify-center">
+            <SafeAreaView className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
                 <ActivityIndicator size="large" color="#FF6B00" />
             </SafeAreaView>
         );
     }
 
     return (
-        <SafeAreaView className="flex-1 bg-white">
+        <SafeAreaView className="flex-1" style={{ backgroundColor: colors.background }}>
             <View className="px-6 py-4 flex-row justify-between items-center bg-white z-10">
                 <View>
                     <Text className="text-2xl font-bold text-accent-dark">My Services</Text>
@@ -279,6 +444,14 @@ export default function ServicesScreen() {
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={{ padding: 24 }}
                 showsVerticalScrollIndicator={false}
+                refreshControl={
+                    <RefreshControl
+                        refreshing={refreshing}
+                        onRefresh={onRefresh}
+                        colors={['#FF6B00']}
+                        tintColor="#FF6B00"
+                    />
+                }
                 ListEmptyComponent={() => (
                     <View className="flex-1 items-center justify-center py-20">
                         <Text className="text-accent font-medium">No services found</Text>
@@ -326,11 +499,14 @@ export default function ServicesScreen() {
                                     onPress={pickImage}
                                     className="bg-surface border-2 border-dashed border-gray-200 rounded-[32px] overflow-hidden mb-6 items-center justify-center h-48"
                                 >
-                                    {selectedImage || editingService?.image_urls?.[0] ? (
+                                    {selectedImage ? (
                                         <Image
-                                            source={{ uri: selectedImage || editingService?.image_urls?.[0] }}
+                                            source={{ uri: selectedImage }}
                                             className="w-full h-full"
+                                            onError={(e) => console.error('[IMAGE LOAD ERROR] Modal Preview:', e.nativeEvent.error, 'URI:', selectedImage)}
                                         />
+                                    ) : editingService?.image_urls?.[0] ? (
+                                        <ServiceImage imageUrl={editingService.image_urls[0]} />
                                     ) : (
                                         <View className="items-center">
                                             <Plus size={32} color="#9CA3AF" />
@@ -413,10 +589,17 @@ export default function ServicesScreen() {
                 <View className="flex-1 justify-center items-center bg-black/70 px-6">
                     <View className="bg-white w-full rounded-[40px] overflow-hidden shadow-2xl">
                         <View className="relative">
-                            <Image
-                                source={{ uri: previewServiceData?.image_urls?.[0] || 'https://images.unsplash.com/photo-1555244162-803834f70033?q=80&w=400&h=300&auto=format&fit=crop' }}
-                                className="w-full h-64"
-                            />
+                            <View className="w-full h-64 bg-gray-100">
+                                {previewServiceData?.image_urls?.[0] ? (
+                                    <ServiceImage imageUrl={previewServiceData.image_urls[0]} />
+                                ) : (
+                                    <Image
+                                        source={{ uri: 'https://images.unsplash.com/photo-1555244162-803834f70033?q=80&w=400&h=300&auto=format&fit=crop' }}
+                                        className="w-full h-full"
+                                        resizeMode="cover"
+                                    />
+                                )}
+                            </View>
                             <TouchableOpacity
                                 onPress={() => setPreviewModalVisible(false)}
                                 className="absolute top-6 right-6 w-10 h-10 bg-black/50 rounded-full items-center justify-center"

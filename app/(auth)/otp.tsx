@@ -4,10 +4,12 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ChevronLeft, CheckCircle2 } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
+import { useTheme } from '../../context/ThemeContext';
 
 export default function OTPScreen() {
     const router = useRouter();
     const { phone } = useLocalSearchParams<{ phone: string }>();
+    const { colors } = useTheme();
     const [otp, setOtp] = useState(['', '', '', '', '', '']);
     const [loading, setLoading] = useState(false);
 
@@ -79,12 +81,13 @@ export default function OTPScreen() {
     };
 
     return (
-        <SafeAreaView className="flex-1 bg-white">
+        <SafeAreaView className="flex-1" style={{ backgroundColor: colors.background }}>
             <TouchableOpacity
                 onPress={() => router.back()}
-                className="ml-4 mt-2 p-2 w-10 h-10 items-center justify-center rounded-full bg-surface"
+                className="ml-4 mt-2 p-2 w-10 h-10 items-center justify-center rounded-full"
+                style={{ backgroundColor: colors.surface }}
             >
-                <ChevronLeft size={24} color="#1F2937" />
+                <ChevronLeft size={24} color={colors.text} />
             </TouchableOpacity>
 
             <KeyboardAvoidingView
@@ -93,12 +96,12 @@ export default function OTPScreen() {
             >
                 <ScrollView contentContainerStyle={{ flexGrow: 1 }} className="px-6">
                     <View className="py-8">
-                        <Text className="text-3xl font-bold text-accent-dark">
+                        <Text className="text-3xl font-bold" style={{ color: colors.text }}>
                             Verify Account
                         </Text>
-                        <Text className="text-accent mt-2 leading-6">
+                        <Text className="mt-2 leading-6" style={{ color: colors.textSecondary }}>
                             Enter the 6-digit code sent to{"\n"}
-                            <Text className="font-bold text-accent-dark">+91 {phone}</Text>
+                            <Text className="font-bold" style={{ color: colors.text }}>+91 {phone}</Text>
                         </Text>
                     </View>
 
@@ -123,9 +126,10 @@ export default function OTPScreen() {
                             {otp.map((digit, index) => (
                                 <View
                                     key={index}
-                                    className={`w-12 h-14 border-2 rounded-xl items-center justify-center bg-surface ${digit ? 'border-primary' : 'border-gray-100'}`}
+                                    className={`w-12 h-14 border-2 rounded-xl items-center justify-center`}
+                                    style={{ backgroundColor: colors.surface, borderColor: digit ? '#FF6B00' : colors.border }}
                                 >
-                                    <Text className="text-xl font-bold text-accent-dark">{digit}</Text>
+                                    <Text className="text-xl font-bold" style={{ color: colors.text }}>{digit}</Text>
                                 </View>
                             ))}
                         </View>
@@ -148,7 +152,7 @@ export default function OTPScreen() {
                     </TouchableOpacity>
 
                     <View className="items-center">
-                        <Text className="text-accent text-sm">Didn't receive code?</Text>
+                        <Text className="text-sm" style={{ color: colors.textSecondary }}>Didn't receive code?</Text>
                         <TouchableOpacity onPress={handleResend} disabled={loading} className="mt-2">
                             <Text className="text-primary font-bold">Resend OTP</Text>
                         </TouchableOpacity>
