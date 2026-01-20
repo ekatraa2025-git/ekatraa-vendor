@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ChevronLeft, Moon, Bell, Languages, X, Check, Sun } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../context/ThemeContext';
+import { refreshTranslations } from '../lib/i18n';
 
 const languages = [
     { code: 'en', name: 'English', native: 'English' },
@@ -18,7 +19,9 @@ export default function SettingsScreen() {
     const { isDarkMode, toggleDarkMode, colors } = useTheme();
     const [showLanguageModal, setShowLanguageModal] = useState(false);
 
-    const handleLanguageSelect = (langCode: string) => {
+    const handleLanguageSelect = async (langCode: string) => {
+        // Refresh translations from backend before changing language
+        await refreshTranslations();
         i18n.changeLanguage(langCode);
         setShowLanguageModal(false);
     };

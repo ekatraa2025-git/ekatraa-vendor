@@ -18,11 +18,7 @@
       "bundleIdentifier": "com.ekatraa.vendor"
     },
     "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/icon.png",
-        "backgroundColor": "#ffffff"
-      },
-      "icon": "./assets/icon.png",
+      "icon": "./assets/android/play_store_512.png",
       "package": "com.ekatraa.vendor",
       "versionCode": 1,
       "edgeToEdgeEnabled": true,
@@ -39,7 +35,15 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-router"
+      "expo-router",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#ffffff",
+          "sounds": []
+        }
+      ]
     ],
     "updates": {
       "enabled": false,
@@ -53,7 +57,8 @@
         "projectId": "0b6b6e3b-dba4-4b7a-a510-da84be32455a"
       },
       "EXPO_PUBLIC_SUPABASE_URL": "https://plbmyltqxucrsjhhwrwy.supabase.co",
-      "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBsYm15bHRxeHVjcnNqaGh3cnd5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY5Mzg2NTgsImV4cCI6MjA4MjUxNDY1OH0.BDgN5rLHWvFzKz_N9cyZyA54--RfIKjy6GgdkU7lsxY"
+      "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBsYm15bHRxeHVjcnNqaGh3cnd5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY5Mzg2NTgsImV4cCI6MjA4MjUxNDY1OH0.BDgN5rLHWvFzKz_N9cyZyA54--RfIKjy6GgdkU7lsxY",
+      "EXPO_PUBLIC_API_URL": ""
     }
   }
 }

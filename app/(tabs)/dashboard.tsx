@@ -115,16 +115,16 @@ export default function DashboardScreen() {
             >
                 <QuickHelp
                     id="dashboard_welcome"
-                    title="New to Ekatraa?"
-                    description="Start by adding your services and setting your availability in the calendar."
-                    actionText="Learn More"
+                    title={t('new_to_ekatraa')}
+                    description={t('start_by_adding_services')}
+                    actionText={t('learn_more')}
                     onAction={() => console.log('Learn More')}
                 />
 
                 {/* Welcome Message */}
                 <View className="mb-4">
-                    <Text className="text-sm font-medium" style={{ color: colors.textSecondary }}>Welcome back,</Text>
-                    <Text className="text-2xl font-extrabold" style={{ color: colors.text }}>{vendor?.business_name || vendor?.owner_name || 'Vendor'}</Text>
+                    <Text className="text-sm font-medium" style={{ color: colors.textSecondary }}>{t('welcome_back')},</Text>
+                    <Text className="text-2xl font-extrabold" style={{ color: colors.text }}>{vendor?.business_name || vendor?.owner_name || t('vendor')}</Text>
                 </View>
 
                 <View className="rounded-3xl p-6 mb-8 overflow-hidden" style={{ backgroundColor: isDarkMode ? colors.surface : '#1F2937' }}>
@@ -135,13 +135,13 @@ export default function DashboardScreen() {
                             onPress={() => router.push({ pathname: '/(tabs)/profile', params: { openPayout: 'true' } })}
                             className="bg-primary self-start px-6 py-2.5 rounded-xl mt-6 shadow-lg shadow-primary/20"
                         >
-                            <Text className="text-white font-bold text-sm">Payout Methods</Text>
+                            <Text className="text-white font-bold text-sm">{t('payout_methods')}</Text>
                         </TouchableOpacity>
                     </View>
                     <View className="absolute -bottom-10 -right-10 w-40 h-40 bg-primary/20 rounded-full" />
                 </View>
 
-                <Text className="text-xl font-bold mb-4" style={{ color: colors.text }}>Quick Actions</Text>
+                <Text className="text-xl font-bold mb-4" style={{ color: colors.text }}>{t('quick_actions')}</Text>
                 <View className="flex-row flex-wrap justify-between">
                     <TouchableOpacity
                         onPress={() => router.push('/quotations')}
@@ -151,8 +151,8 @@ export default function DashboardScreen() {
                         <View className="w-12 h-12 rounded-2xl items-center justify-center mb-4 bg-orange-100">
                             <FileText size={24} color="#FF6B00" strokeWidth={2.5} />
                         </View>
-                        <Text className="text-xs font-bold uppercase tracking-wider" style={{ color: colors.textSecondary }}>Quotations</Text>
-                        <Text className="text-2xl font-bold mt-1" style={{ color: colors.text }}>Manage</Text>
+                        <Text className="text-xs font-bold uppercase tracking-wider" style={{ color: colors.textSecondary }}>{t('quotations')}</Text>
+                        <Text className="text-2xl font-bold mt-1" style={{ color: colors.text }}>{t('manage')}</Text>
                     </TouchableOpacity>
 
                     {stats.map((stat, index) => (
@@ -167,9 +167,9 @@ export default function DashboardScreen() {
                 </View>
 
                 <View className="flex-row justify-between items-center mt-6 mb-4">
-                    <Text className="text-xl font-bold" style={{ color: colors.text }}>Upcoming Bookings</Text>
+                    <Text className="text-xl font-bold" style={{ color: colors.text }}>{t('upcoming_bookings')}</Text>
                     <TouchableOpacity onPress={() => router.push('/(tabs)/bookings')}>
-                        <Text className="text-primary font-bold text-sm">View All</Text>
+                        <Text className="text-primary font-bold text-sm">{t('view_all')}</Text>
                     </TouchableOpacity>
                 </View>
 
@@ -186,7 +186,7 @@ export default function DashboardScreen() {
                             />
                         </View>
                         <View className="flex-1 ml-4">
-                            <Text className="font-extrabold text-lg" style={{ color: colors.text }}>{(upcomingBooking as any).services?.name || 'Booking'}</Text>
+                            <Text className="font-extrabold text-lg" style={{ color: colors.text }}>{(upcomingBooking as any).services?.name || t('booking')}</Text>
                             <Text className="text-sm mt-1 font-medium" style={{ color: colors.textSecondary }}>
                                 {upcomingBooking.booking_date} • {upcomingBooking.booking_time}
                             </Text>
@@ -196,7 +196,7 @@ export default function DashboardScreen() {
                 ) : (
                     <View className="rounded-3xl p-10 items-center justify-center mb-12 border border-dashed" style={{ backgroundColor: colors.surface, borderColor: colors.border }}>
                         <CalendarDays size={40} color={colors.textSecondary} strokeWidth={1.5} />
-                        <Text className="mt-3 font-semibold text-base" style={{ color: colors.textSecondary }}>No upcoming bookings</Text>
+                        <Text className="mt-3 font-semibold text-base" style={{ color: colors.textSecondary }}>{t('no_upcoming_bookings')}</Text>
                     </View>
                 )}
             </ScrollView>

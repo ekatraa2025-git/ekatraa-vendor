@@ -107,40 +107,128 @@ const defaultResources = {
     }
 };
 
-// Backend API URL for translations (update this to your actual backend URL)
-const TRANSLATIONS_API_URL = process.env.EXPO_PUBLIC_API_URL 
-    ? `${process.env.EXPO_PUBLIC_API_URL}/api/translations`
-    : null;
+// Backend API URL for translations
+import Constants from 'expo-constants';
+import { supabase } from './supabase';
 
-// Function to load translations from backend
+const getApiUrl = (): string | null => {
+    // Try process.env first
+    const processEnv = process.env.EXPO_PUBLIC_API_URL;
+    if (processEnv) return `${processEnv}/api/translations`;
+    
+    // Try Constants.expoConfig.extra
+    const extraConfig = Constants.expoConfig?.extra;
+    if (extraConfig?.EXPO_PUBLIC_API_URL) {
+        return `${extraConfig.EXPO_PUBLIC_API_URL}/api/translations`;
+    }
+    
+    // Try app.json extra without EXPO_PUBLIC_ prefix
+    if (extraConfig?.API_URL) {
+        return `${extraConfig.API_URL}/api/translations`;
+    }
+    
+    return null;
+};
+
+const TRANSLATIONS_API_URL = getApiUrl();
+
+// Function to load translations from backend (via API or Supabase)
 export const loadTranslationsFromBackend = async () => {
-    if (!TRANSLATIONS_API_URL) {
-        console.log('No API URL configured, using default translations');
-        return;
+    // Try API first if configured
+    if (TRANSLATIONS_API_URL) {
+        try {
+            const response = await fetch(TRANSLATIONS_API_URL);
+            if (response.ok) {
+                const data = await response.json();
+                
+                // Update i18n resources with backend data
+                if (data.en) {
+                    i18n.addResourceBundle('en', 'translation', data.en, true, true);
+                }
+                if (data.hi) {
+                    i18n.addResourceBundle('hi', 'translation', data.hi, true, true);
+                }
+                if (data.or) {
+                    i18n.addResourceBundle('or', 'translation', data.or, true, true);
+                }
+                
+                console.log('Translations loaded from backend API');
+                return;
+            }
+        } catch (error) {
+            console.warn('Failed to load translations from API, trying Supabase:', error);
+        }
     }
 
+    // Fallback to Supabase direct query
     try {
-        const response = await fetch(TRANSLATIONS_API_URL);
-        if (!response.ok) {
-            throw new Error('Failed to fetch translations');
+        const { data: translations, error } = await supabase
+            .from('translations')
+            .select('key, en, hi, "or"')
+            .order('key', { ascending: true });
+
+        if (error) {
+            throw error;
         }
-        
-        const data = await response.json();
-        
-        // Update i18n resources with backend data
-        if (data.en) {
-            i18n.addResourceBundle('en', 'translation', data.en, true, true);
+
+        if (translations && translations.length > 0) {
+            // Convert to format expected by i18next
+            const result = {
+                en: {} as Record<string, string>,
+                hi: {} as Record<string, string>,
+                or: {} as Record<string, string>,
+            };
+
+            translations.forEach((t: any) => {
+                if (t.key) {
+                    result.en[t.key] = t.en || '';
+                    result.hi[t.key] = t.hi || '';
+                    result.or[t.key] = t['or'] || t.or || '';
+                }
+            });
+
+            // Update i18n resources with backend data
+            if (result.en && Object.keys(result.en).length > 0) {
+                i18n.addResourceBundle('en', 'translation', result.en, true, true);
+            }
+            if (result.hi && Object.keys(result.hi).length > 0) {
+                i18n.addResourceBundle('hi', 'translation', result.hi, true, true);
+            }
+            if (result.or && Object.keys(result.or).length > 0) {
+                i18n.addResourceBundle('or', 'translation', result.or, true, true);
+            }
+
+            console.log('Translations loaded from Supabase');
         }
-        if (data.hi) {
-            i18n.addResourceBundle('hi', 'translation', data.hi, true, true);
-        }
-        if (data.or) {
-            i18n.addResourceBundle('or', 'translation', data.or, true, true);
-        }
-        
-        console.log('Translations loaded from backend');
     } catch (error) {
-        console.warn('Failed to load translations from backend, using defaults:', error);
+        console.warn('Failed to load translations from Supabase, using defaults:', error);
+    }
+};
+
+// Function to reload translations (useful when translations are updated in backend)
+export const reloadTranslations = async () => {
+    await loadTranslationsFromBackend();
+    // Force i18n to reload current language
+    const currentLang = i18n.language || 'en';
+    i18n.changeLanguage(currentLang);
+};
+
+// Function to refresh translations and update UI
+export const refreshTranslations = async () => {
+    try {
+        await loadTranslationsFromBackend();
+        // Trigger a language change to refresh all components using translations
+        const currentLang = i18n.language || 'en';
+        // Force reload by changing to a different language then back
+        await i18n.changeLanguage('en');
+        await new Promise(resolve => setTimeout(resolve, 50));
+        await i18n.changeLanguage(currentLang);
+        // Emit event to notify all components
+        i18n.emit('languageChanged', currentLang);
+        return true;
+    } catch (error) {
+        console.warn('Failed to refresh translations:', error);
+        return false;
     }
 };
 
@@ -154,11 +242,23 @@ try {
                 fallbackLng: 'en',
                 interpolation: {
                     escapeValue: false
+                },
+                react: {
+                    useSuspense: false
                 }
             });
         
-        // Attempt to load translations from backend (non-blocking)
-        loadTranslationsFromBackend();
+        // Load translations from backend after a short delay to ensure i18n is ready
+        setTimeout(() => {
+            loadTranslationsFromBackend().then(() => {
+                // After loading, trigger a language change to ensure all components update
+                const currentLang = i18n.language || 'en';
+                i18n.changeLanguage(currentLang).catch(console.error);
+            }).catch(console.error);
+        }, 100);
+    } else {
+        // If already initialized, just load translations
+        loadTranslationsFromBackend().catch(console.error);
     }
 } catch (error) {
     console.warn('i18n initialization failed:', error);
@@ -169,7 +269,10 @@ try {
                 resources: defaultResources,
                 lng: 'en',
                 fallbackLng: 'en',
-                interpolation: { escapeValue: false }
+                interpolation: { escapeValue: false },
+                react: {
+                    useSuspense: false
+                }
             });
         } catch (e) {
             console.warn('i18n fallback init also failed:', e);

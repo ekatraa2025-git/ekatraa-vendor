@@ -7,6 +7,7 @@ import QuickHelp from '../../components/QuickHelp';
 import { supabase } from '../../lib/supabase';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../../context/ThemeContext';
+import { refreshTranslations } from '../../lib/i18n';
 // @ts-ignore - Using legacy API for compatibility
 import * as FileSystem from 'expo-file-system/legacy';
 
@@ -588,7 +589,8 @@ export default function ProfileScreen() {
                                 {languages.map((lang) => (
                                     <TouchableOpacity
                                         key={lang.code}
-                                        onPress={() => {
+                                        onPress={async () => {
+                                            await refreshTranslations();
                                             i18n.changeLanguage(lang.code);
                                             setShowLanguageModal(false);
                                         }}

@@ -9,6 +9,7 @@ import * as Location from 'expo-location';
 import { supabase } from '../../lib/supabase';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../../context/ThemeContext';
+import Constants from 'expo-constants';
 // @ts-ignore - Using legacy API for compatibility
 import * as FileSystem from 'expo-file-system/legacy';
 
@@ -89,6 +90,7 @@ export default function OnboardingScreen() {
     const [serviceCount, setServiceCount] = useState(0);
     const [categories, setCategories] = useState<{ id: string, name: string }[]>([]);
     const [showCategoryModal, setShowCategoryModal] = useState(false);
+    const [loadingCategories, setLoadingCategories] = useState(false);
 
     const [formData, setFormData] = useState({
         businessName: '',
@@ -108,13 +110,104 @@ export default function OnboardingScreen() {
 
     const fetchCategories = async () => {
         try {
-            const { data, error } = await supabase
+            setLoadingCategories(true);
+            console.log('[CATEGORIES] Starting fetch...');
+            
+            // Try selecting all columns first to debug
+            const { data: allData, error: allError } = await supabase
                 .from('vendor_categories')
-                .select('id, name')
-                .order('name');
-            if (data) setCategories(data);
-        } catch (error) {
-            console.error('Error fetching categories:', error);
+                .select('*')
+                .order('name', { ascending: true });
+            
+            console.log('[CATEGORIES] Query result:', {
+                hasData: !!allData,
+                dataLength: allData?.length,
+                error: allError ? {
+                    code: allError.code,
+                    message: allError.message,
+                    details: allError.details,
+                    hint: allError.hint
+                } : null,
+                firstItem: allData?.[0]
+            });
+            
+            if (allError) {
+                console.error('[CATEGORIES] Query error:', allError);
+                
+                // If permission error, try API endpoint
+                if (allError.code === 'PGRST116' || allError.code === '42501' || 
+                    allError.message?.includes('permission') || 
+                    allError.message?.includes('policy') ||
+                    allError.message?.includes('row-level security')) {
+                    console.warn('[CATEGORIES] Permission denied, trying API endpoint');
+                    
+                    const apiUrl = process.env.EXPO_PUBLIC_API_URL || 
+                        (Constants.expoConfig?.extra?.EXPO_PUBLIC_API_URL) ||
+                        (Constants.expoConfig?.extra?.API_URL);
+                    
+                    console.log('[CATEGORIES] API URL:', apiUrl);
+                    
+                    if (apiUrl) {
+                        try {
+                            const response = await fetch(`${apiUrl}/api/categories`);
+                            console.log('[CATEGORIES] API response status:', response.status);
+                            
+                            if (response.ok) {
+                                const apiData = await response.json();
+                                console.log('[CATEGORIES] API data received:', apiData?.length, apiData);
+                                
+                                if (apiData && Array.isArray(apiData) && apiData.length > 0) {
+                                    // Map API data to expected format
+                                    const mappedData = apiData.map((item: any) => ({
+                                        id: item.id || item.category_id || String(item.name),
+                                        name: item.name || item.category_name || String(item.id)
+                                    }));
+                                    
+                                    console.log('[CATEGORIES] Mapped API data:', mappedData);
+                                    setCategories(mappedData);
+                                    return;
+                                }
+                            } else {
+                                const errorText = await response.text();
+                                console.error('[CATEGORIES] API error response:', errorText);
+                            }
+                        } catch (apiError: any) {
+                            console.error('[CATEGORIES] API fetch exception:', apiError);
+                        }
+                    } else {
+                        console.warn('[CATEGORIES] No API URL configured');
+                    }
+                }
+                return;
+            }
+            
+            // Process the data if we got it
+            if (allData && Array.isArray(allData) && allData.length > 0) {
+                // Map the data to ensure we have id and name
+                const mappedData = allData.map((item: any) => {
+                    // Try different possible column names
+                    const id = item.id || item.category_id || item.uuid || String(item.name || '');
+                    const name = item.name || item.category_name || item.title || item.label || String(item.id || '');
+                    
+                    return { id, name };
+                }).filter((item: any) => item.id && item.name);
+                
+                if (mappedData.length > 0) {
+                    console.log('[CATEGORIES] Successfully loaded:', mappedData.length, 'categories');
+                    console.log('[CATEGORIES] Sample:', mappedData.slice(0, 3));
+                    setCategories(mappedData);
+                    return;
+                } else {
+                    console.warn('[CATEGORIES] Data found but could not map to id/name format');
+                    console.warn('[CATEGORIES] Raw data sample:', allData[0]);
+                }
+            } else {
+                console.warn('[CATEGORIES] No categories found - table exists but is empty or query returned no rows');
+            }
+        } catch (error: any) {
+            console.error('[CATEGORIES] Exception:', error);
+        } finally {
+            setLoadingCategories(false);
         }
     };
 
@@ -363,15 +456,25 @@ export default function OnboardingScreen() {
             <View className="flex-1 justify-end bg-black/50">
                 <View className="bg-white rounded-t-3xl h-[60%] p-6">
                     <View className="flex-row justify-between items-center mb-6">
-                        <Text className="text-xl font-bold text-accent-dark">Select Category</Text>
+                        <Text className="text-xl font-bold text-accent-dark">{t('select_category')}</Text>
                         <TouchableOpacity onPress={() => setShowCategoryModal(false)}>
                             <X size={24} color="#6B7280" />
                         </TouchableOpacity>
                     </View>
-                    <FlatList
-                        data={categories}
-                        keyExtractor={(item) => item.id}
-                        renderItem={({ item }) => (
+                    {loadingCategories ? (
+                        <View className="flex-1 items-center justify-center py-20">
+                            <ActivityIndicator size="large" color="#FF6B00" />
+                            <Text className="text-accent mt-4 font-bold">{t('loading')}</Text>
+                        </View>
+                    ) : categories.length === 0 ? (
+                        <View className="flex-1 items-center justify-center py-20">
+                            <Text className="text-accent font-bold">{t('no_categories_found')}</Text>
+                        </View>
+                    ) : (
+                        <FlatList
+                            data={categories}
+                            keyExtractor={(item) => item.id}
+                            renderItem={({ item }) => (
                             <TouchableOpacity
                                 onPress={() => {
                                     setFormData({ ...formData, category: item.name, categoryId: item.id });
@@ -384,9 +487,10 @@ export default function OnboardingScreen() {
                                 </Text>
                                 {formData.category === item.name && <Check size={20} color="#FF6B00" />}
                             </TouchableOpacity>
-                        )}
-                        showsVerticalScrollIndicator={false}
-                    />
+                            )}
+                            showsVerticalScrollIndicator={false}
+                        />
+                    )}
                 </View>
             </View>
         </Modal>
@@ -394,8 +498,8 @@ export default function OnboardingScreen() {
 
     const renderStep1 = () => (
         <View className="flex-1">
-            <Text className="text-3xl font-bold text-accent-dark mb-2">Business Profile</Text>
-            <Text className="text-accent text-base mb-8">Tell us about your service or business</Text>
+            <Text className="text-3xl font-bold text-accent-dark mb-2">{t('business_profile')}</Text>
+            <Text className="text-accent text-base mb-8">{t('tell_us_about_business')}</Text>
 
             <View className="items-center mb-10">
                 <TouchableOpacity
@@ -422,7 +526,7 @@ export default function OnboardingScreen() {
                     ) : (
                         <View className="items-center">
                             <Camera size={40} color="#FF6B00" strokeWidth={1.5} />
-                            <Text className="text-xs text-accent mt-2 font-bold uppercase tracking-widest text-center px-4">Upload Logo or Profile Picture</Text>
+                            <Text className="text-xs text-accent mt-2 font-bold uppercase tracking-widest text-center px-4">{t('upload_logo_or_profile')}</Text>
                         </View>
                     )}
                     <View className="absolute bottom-2 right-2 bg-primary p-2.5 rounded-2xl border-4 border-white shadow-md">
@@ -433,11 +537,11 @@ export default function OnboardingScreen() {
 
             <View className="space-y-6">
                 <View>
-                    <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">Business Name</Text>
+                    <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">{t('business_name')}</Text>
                     <View className="flex-row items-center bg-white border-2 border-gray-100 rounded-2xl px-4 py-4 focus:border-primary">
                         <Store size={22} color="#000000" className="mr-3" strokeWidth={2.5} />
                         <TextInput
-                            placeholder="e.g. Royal Catering Services"
+                            placeholder={t('business_name_placeholder')}
                             placeholderTextColor="#9CA3AF"
                             value={formData.businessName}
                             onChangeText={(text) => setFormData({ ...formData, businessName: text })}
@@ -448,23 +552,28 @@ export default function OnboardingScreen() {
                 </View>
 
                 <View className="mt-4">
-                    <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">Business Category</Text>
+                    <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">{t('business_category')}</Text>
                     <TouchableOpacity
-                        onPress={() => setShowCategoryModal(true)}
+                        onPress={async () => {
+                            if (categories.length === 0) {
+                                await fetchCategories();
+                            }
+                            setShowCategoryModal(true);
+                        }}
                         className="flex-row items-center bg-white border-2 border-gray-100 rounded-2xl px-4 py-4"
                     >
                         <Tag size={22} color="#000000" className="mr-3" strokeWidth={2.5} />
                         <Text className={`flex-1 font-extrabold text-lg ${formData.category ? 'text-black' : 'text-gray-400'}`}>
-                            {formData.category || 'Select Category'}
+                            {formData.category || t('select_category')}
                         </Text>
                         <ChevronDown size={22} color="#9CA3AF" />
                     </TouchableOpacity>
                 </View>
 
                 <View className="mt-4">
-                    <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">Brief Description</Text>
+                    <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">{t('brief_description')}</Text>
                     <TextInput
-                        placeholder="Tell clients what makes you special..."
+                        placeholder={t('description_placeholder')}
                         placeholderTextColor="#9CA3AF"
                         multiline
                         numberOfLines={4}
@@ -481,12 +590,12 @@ export default function OnboardingScreen() {
 
     const renderStep2 = () => (
         <View className="flex-1">
-            <Text className="text-3xl font-bold text-accent-dark mb-2">Location & Contact</Text>
-            <Text className="text-accent text-base mb-8">Where can clients reach you?</Text>
+            <Text className="text-3xl font-bold text-accent-dark mb-2">{t('location_and_contact')}</Text>
+            <Text className="text-accent text-base mb-8">{t('where_can_clients_reach')}</Text>
 
             <View className="space-y-6">
                 <View>
-                    <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">Official Phone Number</Text>
+                    <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">{t('official_phone_number')}</Text>
                     <View className="flex-row items-center bg-gray-50 border-2 border-gray-100 rounded-2xl px-4 py-4">
                         <Text className="text-accent font-extrabold text-lg mr-3">+91</Text>
                         <TextInput
@@ -498,26 +607,26 @@ export default function OnboardingScreen() {
                             <Check size={16} color="#059669" strokeWidth={3} />
                         </View>
                     </View>
-                    <Text className="text-green-600 text-[10px] font-bold uppercase tracking-widest mt-2 ml-1">✓ Verified Phone Number</Text>
+                    <Text className="text-green-600 text-[10px] font-bold uppercase tracking-widest mt-2 ml-1">{t('verified_phone_number')}</Text>
                 </View>
 
                 <View className="mt-4">
-                    <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">Service Location / Address</Text>
+                    <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">{t('service_location_address')}</Text>
                     <View className="bg-white border-2 border-gray-100 rounded-3xl p-3">
                         <View className="flex-row items-center justify-between px-3 py-2 border-b border-gray-100 mb-2">
-                            <Text className="text-accent text-[10px] font-bold uppercase tracking-widest">Pinpoint on Map</Text>
+                            <Text className="text-accent text-[10px] font-bold uppercase tracking-widest">{t('pinpoint_on_map')}</Text>
                             <TouchableOpacity
                                 onPress={getCurrentLocation}
                                 className="flex-row items-center bg-primary/10 px-3 py-1.5 rounded-full"
                             >
                                 <MapPin size={14} color="#FF6B00" strokeWidth={2.5} />
-                                <Text className="text-primary text-xs font-bold ml-1">Auto-detect</Text>
+                                <Text className="text-primary text-xs font-bold ml-1">{t('auto_detect')}</Text>
                             </TouchableOpacity>
                         </View>
                         <View className="flex-row items-start px-2 py-2">
                             <MapPin size={24} color="#000000" className="mr-3 mt-1" strokeWidth={2} />
                             <TextInput
-                                placeholder="Search area or enter full address..."
+                                placeholder={t('search_area_or_address')}
                                 placeholderTextColor="#9CA3AF"
                                 multiline
                                 numberOfLines={4}
@@ -552,8 +661,13 @@ export default function OnboardingScreen() {
         <View className="flex-1">
             {hasServices ? (
                 <>
-                    <Text className="text-3xl font-bold text-accent-dark mb-2">Your Listings</Text>
-                    <Text className="text-accent text-base mb-8">You have {serviceCount} service{serviceCount > 1 ? 's' : ''} active</Text>
+                    <Text className="text-3xl font-bold text-accent-dark mb-2">{t('your_listings')}</Text>
+                    <Text className="text-accent text-base mb-8">
+                        {serviceCount === 1 
+                            ? t('you_have_service_active', { count: serviceCount })
+                            : t('you_have_services_active', { count: serviceCount })
+                        }
+                    </Text>
 
                     <View className="bg-green-50 border-2 border-green-100 rounded-3xl p-10 items-center mb-8 shadow-sm">
                         <View className="w-32 h-32 rounded-full border-4 border-surface overflow-hidden bg-surface items-center justify-center mb-6">
@@ -578,9 +692,9 @@ export default function OnboardingScreen() {
                                 <Check size={48} color="#059669" strokeWidth={3} />
                             )}
                         </View>
-                        <Text className="text-green-900 font-extrabold text-2xl mb-2">Profile Ready!</Text>
+                        <Text className="text-green-900 font-extrabold text-2xl mb-2">{t('profile_ready')}</Text>
                         <Text className="text-green-700 text-center text-base font-medium leading-6">
-                            Your existing services are listed. You're ready to start receiving new bookings.
+                            {t('profile_ready_description')}
                         </Text>
                     </View>
 
@@ -589,8 +703,8 @@ export default function OnboardingScreen() {
                         className="bg-white border-2 border-gray-100 rounded-3xl p-6 flex-row items-center justify-between shadow-sm"
                     >
                         <View className="flex-1">
-                            <Text className="text-accent-dark font-extrabold text-xl">Manage Catalog</Text>
-                            <Text className="text-accent font-bold text-sm mt-1">Add or edit more services</Text>
+                            <Text className="text-accent-dark font-extrabold text-xl">{t('manage_catalog')}</Text>
+                            <Text className="text-accent font-bold text-sm mt-1">{t('add_or_edit_services')}</Text>
                         </View>
                         <View className="bg-primary/10 p-3 rounded-2xl">
                             <ArrowRight size={24} color="#FF6B00" strokeWidth={2.5} />
@@ -599,8 +713,8 @@ export default function OnboardingScreen() {
                 </>
             ) : (
                 <>
-                    <Text className="text-3xl font-bold text-accent-dark mb-2">Starter Service</Text>
-                    <Text className="text-accent text-base mb-8">Add your primary listing to get started</Text>
+                    <Text className="text-3xl font-bold text-accent-dark mb-2">{t('starter_service')}</Text>
+                    <Text className="text-accent text-base mb-8">{t('add_primary_listing')}</Text>
 
                     <TouchableOpacity
                         onPress={() => pickImage('service')}
@@ -628,8 +742,8 @@ export default function OnboardingScreen() {
                                 <View className="w-20 h-20 bg-primary/10 rounded-3xl items-center justify-center mb-5">
                                     <Plus size={40} color="#FF6B00" strokeWidth={2.5} />
                                 </View>
-                                <Text className="text-accent-dark font-extrabold text-xl">Upload Cover Photo</Text>
-                                <Text className="text-accent text-sm mt-2 font-bold px-10 text-center">Showcase your best work to attract high-value clients.</Text>
+                                <Text className="text-accent-dark font-extrabold text-xl">{t('upload_cover_photo')}</Text>
+                                <Text className="text-accent text-sm mt-2 font-bold px-10 text-center">{t('showcase_best_work')}</Text>
                             </View>
                         )}
                         {serviceImage && (
@@ -644,9 +758,9 @@ export default function OnboardingScreen() {
 
                     <View className="space-y-6">
                         <View>
-                            <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">Listing Name</Text>
+                            <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">{t('listing_name')}</Text>
                             <TextInput
-                                placeholder="e.g. Premium Wedding Photography"
+                                placeholder={t('listing_name_placeholder')}
                                 placeholderTextColor="#9CA3AF"
                                 value={formData.serviceName}
                                 onChangeText={(text) => setFormData({ ...formData, serviceName: text })}
@@ -656,11 +770,11 @@ export default function OnboardingScreen() {
                         </View>
 
                         <View className="mt-4">
-                            <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">Base Package Price (₹)</Text>
+                            <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">{t('base_package_price')}</Text>
                             <View className="flex-row items-center bg-white border-2 border-gray-100 rounded-2xl px-5 py-5">
                                 <Text className="text-black font-extrabold text-xl mr-3">₹</Text>
                                 <TextInput
-                                    placeholder="e.g. 25000"
+                                    placeholder={t('price_placeholder')}
                                     placeholderTextColor="#9CA3AF"
                                     keyboardType="number-pad"
                                     value={formData.servicePrice}
@@ -679,7 +793,7 @@ export default function OnboardingScreen() {
         <SafeAreaView className="flex-1" style={{ backgroundColor: colors.background }}>
             <View className="px-6 pt-4 flex-row justify-between items-center" style={{ backgroundColor: colors.background }}>
                 <Text className="font-extrabold text-sm tracking-widest uppercase" style={{ color: colors.text }}>
-                    Registration • Step {step}/3
+                    {t('registration')} • {t('step')} {step}/3
                 </Text>
                 <View className="flex-row">
                     {[1, 2, 3].map((s) => (
@@ -700,7 +814,7 @@ export default function OnboardingScreen() {
                     {fetching ? (
                         <View className="flex-1 items-center justify-center py-20">
                             <ActivityIndicator size="large" color="#FF6B00" />
-                            <Text className="text-accent mt-4 font-bold tracking-wider">Syncing your profile...</Text>
+                            <Text className="text-accent mt-4 font-bold tracking-wider">{t('syncing_profile')}</Text>
                         </View>
                     ) : (
                         <>
@@ -722,7 +836,7 @@ export default function OnboardingScreen() {
                             ) : (
                                 <>
                                     <Text className="text-white font-extrabold text-xl mr-3">
-                                        {step === 3 ? 'Finalize Registration' : 'Continue'}
+                                        {step === 3 ? t('finalize_registration') : t('continue')}
                                     </Text>
                                     <ArrowRight size={22} color="white" strokeWidth={3} />
                                 </>
@@ -734,7 +848,7 @@ export default function OnboardingScreen() {
                                 onPress={() => setStep(step - 1)}
                                 className="mt-6 items-center"
                             >
-                                <Text className="text-accent font-extrabold text-base border-b-2 border-gray-100 pb-1">Previous Step</Text>
+                                <Text className="text-accent font-extrabold text-base border-b-2 border-gray-100 pb-1">{t('previous_step')}</Text>
                             </TouchableOpacity>
                         )}
                     </View>
