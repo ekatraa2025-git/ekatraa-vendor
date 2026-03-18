@@ -22,15 +22,15 @@ const getEnvVar = (key: string): string => {
     // Try process.env first (for EXPO_PUBLIC_ prefixed vars)
     const processEnv = process.env[key];
     if (processEnv) return processEnv;
-    
+
     // Try Constants.expoConfig.extra
     const extraConfig = Constants.expoConfig?.extra;
     if (extraConfig && extraConfig[key]) return extraConfig[key];
-    
+
     // Try without EXPO_PUBLIC_ prefix in extra
     const keyWithoutPrefix = key.replace('EXPO_PUBLIC_', '');
     if (extraConfig && extraConfig[keyWithoutPrefix]) return extraConfig[keyWithoutPrefix];
-    
+
     return '';
 };
 
@@ -66,8 +66,23 @@ try {
         supabase = {
             auth: {
                 getSession: async () => ({ data: { session: null }, error: null }),
+                getUser: async () => ({ data: { user: null }, error: null }),
                 signInWithOtp: async () => ({ error: { message: 'Supabase not configured' } }),
+                onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => { } } } }),
+                signOut: async () => ({ error: null }),
             },
+            from: () => ({
+                select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }), order: () => ({ limit: async () => ({ data: [], error: null }) }) }), order: () => ({ limit: async () => ({ data: [], error: null }) }), insert: async () => ({ data: null, error: null }), update: () => ({ eq: async () => ({ data: null, error: null }) }), delete: () => ({ eq: async () => ({ data: null, error: null }) }) }),
+                insert: () => ({ select: () => ({ single: async () => ({ data: null, error: null }) }) }),
+            }),
+            storage: {
+                from: () => ({
+                    getPublicUrl: () => ({ data: { publicUrl: '' } }),
+                    createSignedUrl: async () => ({ data: { signedUrl: '' }, error: null }),
+                    upload: async () => ({ data: null, error: null }),
+                }),
+            },
+            channel: () => ({ on: () => ({ subscribe: () => ({ unsubscribe: () => { } }) }) }),
         };
     }
 } catch (error) {
@@ -76,8 +91,16 @@ try {
     supabase = {
         auth: {
             getSession: async () => ({ data: { session: null }, error: null }),
+            getUser: async () => ({ data: { user: null }, error: null }),
             signInWithOtp: async () => ({ error: { message: 'Supabase not configured' } }),
+            onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => { } } } }),
+            signOut: async () => ({ error: null }),
         },
+        from: () => ({
+            select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }), order: () => ({ limit: async () => ({ data: [], error: null }) }) }),
+        }),
+        storage: { from: () => ({ getPublicUrl: () => ({ data: { publicUrl: '' } }) }) },
+        channel: () => ({ on: () => ({ subscribe: () => ({ unsubscribe: () => { } }) }) }),
     };
 }
 

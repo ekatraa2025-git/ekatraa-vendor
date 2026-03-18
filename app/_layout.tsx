@@ -67,33 +67,53 @@ function AppContent() {
     const [vendorId, setVendorId] = useState<string | null>(null);
 
     useEffect(() => {
-        // Initialize notifications
-        registerForPushNotificationsAsync().catch(console.error);
+        // Initialize notifications with timeout
+        const notificationTimeout = setTimeout(() => {
+            registerForPushNotificationsAsync().catch((err) => {
+                console.warn('Notification registration failed:', err);
+            });
+        }, 1000); // Delay to not block app startup
 
-        // Load translations from backend on app start
-        loadTranslationsFromBackend().catch(console.error);
+        // Load translations from backend on app start with timeout
+        const translationTimeout = setTimeout(() => {
+            loadTranslationsFromBackend().catch((err) => {
+                console.warn('Translation loading failed:', err);
+            });
+        }, 500); // Small delay to not block app startup
 
-        // Get current user/vendor ID
-        supabase.auth.getUser().then(({ data: { user } }) => {
-            if (user) {
-                setVendorId(user.id);
-            }
-        });
+        // Get current user/vendor ID with timeout
+        const getUserTimeout = setTimeout(() => {
+            supabase.auth.getUser().then(({ data: { user } }: { data: { user: any } }) => {
+                if (user) {
+                    setVendorId(user.id);
+                }
+            }).catch((err: unknown) => {
+                console.warn('Get user failed:', err);
+            });
+        }, 500);
 
         // Listen for auth state changes
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-            if (session?.user) {
-                setVendorId(session.user.id);
-            } else {
-                setVendorId(null);
-            }
-        });
+        let subscription: any = null;
+        try {
+            const authStateResult = supabase.auth.onAuthStateChange((_event: any, session: any) => {
+                if (session?.user) {
+                    setVendorId(session.user.id);
+                } else {
+                    setVendorId(null);
+                }
+            });
+            subscription = authStateResult.data.subscription;
+        } catch (err) {
+            console.warn('Auth state change listener failed:', err);
+        }
 
         // Refresh translations when app comes to foreground
         const handleAppStateChange = (nextAppState: AppStateStatus) => {
             if (nextAppState === 'active') {
                 // Reload translations when app becomes active to get latest updates
-                refreshTranslations().catch(console.error);
+                refreshTranslations().catch((err) => {
+                    console.warn('Translation refresh failed:', err);
+                });
             }
         };
 
@@ -101,16 +121,23 @@ function AppContent() {
 
         // Set up periodic refresh (every 5 minutes) to get translation updates
         const refreshInterval = setInterval(() => {
-            refreshTranslations().catch(console.error);
+            refreshTranslations().catch((err) => {
+                console.warn('Periodic translation refresh failed:', err);
+            });
         }, 5 * 60 * 1000); // 5 minutes
 
         return () => {
-            subscription.unsubscribe();
+            clearTimeout(notificationTimeout);
+            clearTimeout(translationTimeout);
+            clearTimeout(getUserTimeout);
+            if (subscription) {
+                subscription.unsubscribe();
+            }
             appStateSubscription.remove();
             clearInterval(refreshInterval);
         };
     }, []);
-    
+
     return (
         <NotificationProvider vendorId={vendorId}>
             <GestureHandlerRootView style={{ flex: 1 }}>
@@ -129,6 +156,7 @@ function AppContent() {
                     <Stack.Screen name="onboarding/verify" />
                     <Stack.Screen name="(tabs)" />
                     <Stack.Screen name="settings" />
+                    <Stack.Screen name="notifications" />
                 </Stack>
             </GestureHandlerRootView>
         </NotificationProvider>

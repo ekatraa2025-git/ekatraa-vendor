@@ -6,6 +6,7 @@ import { FileText, Plus, ChevronRight, Search, Filter, Clock, CheckCircle2, Aler
 import { supabase } from '../../lib/supabase';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../../context/ThemeContext';
+import BottomNav from '../../components/BottomNav';
 
 export default function QuotationsScreen() {
     const router = useRouter();
@@ -78,8 +79,8 @@ export default function QuotationsScreen() {
         <SafeAreaView className="flex-1" style={{ backgroundColor: colors.background }}>
             <View className="px-6 py-4 flex-row justify-between items-center">
                 <View>
-                    <Text className="text-3xl font-extrabold text-accent-dark">Quotations</Text>
-                    <Text className="text-accent font-medium mt-1">Manage your service bids</Text>
+                    <Text className="text-3xl font-extrabold" style={{ color: colors.text }}>Quotations</Text>
+                    <Text className="font-medium mt-1" style={{ color: colors.textSecondary }}>Manage your service bids</Text>
                 </View>
                 <TouchableOpacity
                     onPress={() => router.push('/quotations/create')}
@@ -90,9 +91,9 @@ export default function QuotationsScreen() {
             </View>
 
             <View className="px-6 mb-6">
-                <View className="flex-row bg-surface rounded-2xl px-4 py-3 items-center border border-gray-100">
-                    <Search size={20} color="#9CA3AF" />
-                    <Text className="text-gray-400 ml-3 flex-1 font-medium">Search quotations...</Text>
+                <View className="flex-row rounded-2xl px-4 py-3 items-center" style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }}>
+                    <Search size={20} color={colors.textSecondary} />
+                    <Text className="ml-3 flex-1 font-medium" style={{ color: colors.textSecondary }}>Search quotations...</Text>
                     <Filter size={20} color="#FF6B00" />
                 </View>
             </View>
@@ -118,11 +119,12 @@ export default function QuotationsScreen() {
                         <TouchableOpacity
                             key={item.id}
                             onPress={() => router.push(`/quotations/${item.id}`)}
-                            className="bg-white border-2 border-gray-100 rounded-3xl p-5 mb-4 shadow-sm"
+                            className="rounded-3xl p-5 mb-4 shadow-sm"
+                            style={{ backgroundColor: colors.surface, borderWidth: 2, borderColor: colors.border }}
                         >
                             <View className="flex-row justify-between items-start mb-4">
-                                <View className="bg-surface px-3 py-1.5 rounded-full border border-gray-50">
-                                    <Text className="text-[10px] font-bold text-accent tracking-widest uppercase">
+                                <View className="px-3 py-1.5 rounded-full border" style={{ backgroundColor: colors.background, borderColor: colors.border }}>
+                                    <Text className="text-[10px] font-bold tracking-widest uppercase" style={{ color: colors.textSecondary }}>
                                         #QT-{item.id?.slice(0, 8)?.toUpperCase() || 'N/A'}
                                     </Text>
                                 </View>
@@ -140,15 +142,15 @@ export default function QuotationsScreen() {
                                 </View>
                             </View>
 
-                            <Text className="text-xl font-extrabold text-accent-dark mb-2">{item.service_name || item.service_type || 'Service'}</Text>
+                            <Text className="text-xl font-extrabold mb-2" style={{ color: colors.text }}>{item.service_name || item.service_type || 'Service'}</Text>
                             
                             {item.customer_name && (
-                                <Text className="text-accent text-sm font-medium mb-2">Customer: {item.customer_name}</Text>
+                                <Text className="text-sm font-medium mb-2" style={{ color: colors.textSecondary }}>Customer: {item.customer_name}</Text>
                             )}
 
                             <View className="flex-row items-center mb-2">
-                                <Clock size={14} color="#9CA3AF" />
-                                <Text className="text-accent text-xs font-bold ml-1">
+                                <Clock size={14} color={colors.textSecondary} />
+                                <Text className="text-xs font-bold ml-1" style={{ color: colors.textSecondary }}>
                                     Quotation: {item.quotation_date ? new Date(item.quotation_date).toLocaleDateString() : 'N/A'}
                                 </Text>
                             </View>
@@ -156,7 +158,7 @@ export default function QuotationsScreen() {
                             {item.delivery_date && (
                                 <View className="flex-row items-center mb-2">
                                     <Clock size={14} color="#9CA3AF" />
-                                    <Text className="text-accent text-xs font-bold ml-1">
+                                    <Text className="text-xs font-bold ml-1" style={{ color: colors.textSecondary }}>
                                         Delivery: {new Date(item.delivery_date).toLocaleDateString()}
                                     </Text>
                                 </View>
@@ -164,17 +166,17 @@ export default function QuotationsScreen() {
 
                             {item.venue_address && (
                                 <View className="mb-2">
-                                    <Text className="text-accent text-xs font-medium" numberOfLines={1}>
+                                    <Text className="text-xs font-medium" numberOfLines={1} style={{ color: colors.textSecondary }}>
                                         Venue: {item.venue_address}
                                     </Text>
                                 </View>
                             )}
 
-                            <View className="h-[1px] bg-gray-50 w-full mb-4" />
+                            <View className="h-[1px] w-full mb-4" style={{ backgroundColor: colors.border }} />
 
                             <View className="flex-row justify-between items-center">
                                 <View>
-                                    <Text className="text-accent text-[10px] font-bold uppercase">Amount</Text>
+                                    <Text className="text-[10px] font-bold uppercase" style={{ color: colors.textSecondary }}>Amount</Text>
                                 </View>
                                 <View>
                                     <Text className="text-primary font-extrabold text-lg">₹{item.total_amount || item.amount || '0'}</Text>
@@ -187,8 +189,8 @@ export default function QuotationsScreen() {
                         <View className="w-20 h-20 bg-surface rounded-full items-center justify-center mb-4">
                             <FileText size={40} color="#9CA3AF" strokeWidth={1.5} />
                         </View>
-                        <Text className="text-accent-dark font-extrabold text-xl">No Quotations Yet</Text>
-                        <Text className="text-accent text-center mt-2 px-10">
+                        <Text className="font-extrabold text-xl" style={{ color: colors.text }}>No Quotations Yet</Text>
+                        <Text className="text-center mt-2 px-10" style={{ color: colors.textSecondary }}>
                             Create professional quotations and send them to your clients directly.
                         </Text>
                         <TouchableOpacity
@@ -199,7 +201,13 @@ export default function QuotationsScreen() {
                         </TouchableOpacity>
                     </View>
                 )}
+                
+                {/* Bottom spacing for nav */}
+                <View style={{ height: 120 }} />
             </ScrollView>
+            
+            {/* Bottom Navigation */}
+            <BottomNav />
         </SafeAreaView>
     );
 }

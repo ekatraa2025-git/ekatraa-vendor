@@ -39,9 +39,15 @@ export function NotificationProvider({ children, vendorId }: { children: React.R
 
   // Setup real-time subscription
   useEffect(() => {
-    if (!vendorId) return;
+    if (!vendorId) {
+      console.log('[NotificationContext] No vendorId, skipping subscription');
+      return;
+    }
 
+    console.log('[NotificationContext] Setting up notification subscription for vendorId:', vendorId);
+    
     const unsubscribe = setupNotificationSubscription(vendorId, (notification) => {
+      console.log('[NotificationContext] New notification received:', notification);
       setNotifications((prev) => [notification, ...prev]);
     });
 

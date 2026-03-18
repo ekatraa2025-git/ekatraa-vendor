@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Image, ActivityIndicator, Alert, Modal, TextInput, Linking, Platform } from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import React, { useEffect, useState, useCallback } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, Image, ActivityIndicator, Alert, Modal, TextInput, Linking, Platform, KeyboardAvoidingView } from 'react-native';
+import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { User, Shield, CreditCard, Bell, HelpCircle, LogOut, ChevronRight, Settings, Check, X, Languages, Phone as PhoneIcon, Mail } from 'lucide-react-native';
 import QuickHelp from '../../components/QuickHelp';
@@ -8,8 +8,7 @@ import { supabase } from '../../lib/supabase';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../../context/ThemeContext';
 import { refreshTranslations } from '../../lib/i18n';
-// @ts-ignore - Using legacy API for compatibility
-import * as FileSystem from 'expo-file-system/legacy';
+import { readAsStringAsync } from 'expo-file-system/legacy';
 
 const languages = [
     { code: 'en', name: 'English', native: 'English' },
@@ -35,7 +34,7 @@ export default function ProfileScreen() {
     const [taxModal, setTaxModal] = useState(false);
     const [notifModal, setNotifModal] = useState(false);
     const [supportModal, setSupportModal] = useState(false);
-    
+
     // Support contact details
     const supportContacts = {
         phones: ['+91 9876543210', '+91 1234567890'],
@@ -49,6 +48,13 @@ export default function ProfileScreen() {
         fetchProfile();
     }, []);
 
+    // Refresh profile when screen comes into focus (e.g., after verification)
+    useFocusEffect(
+        useCallback(() => {
+            fetchProfile();
+        }, [])
+    );
+
     // Open payout modal if navigated from dashboard
     useEffect(() => {
         if (openPayout === 'true' && !loading) {
@@ -59,10 +65,10 @@ export default function ProfileScreen() {
     // Helper function to get signed URL from file path or existing URL
     const getImageUrl = async (urlOrPath: string | null | undefined): Promise<string> => {
         if (!urlOrPath) return '';
-        
+
         try {
             let fileName = urlOrPath;
-            
+
             // If it's already a full URL, extract the filename
             if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
                 // Extract filename from Supabase storage URL
@@ -81,7 +87,7 @@ export default function ProfileScreen() {
                 // Extract filename from path
                 fileName = urlOrPath.split('/').pop() || urlOrPath;
             }
-            
+
             // Generate signed URL (valid for 24 hours for better caching)
             const { data, error } = await supabase.storage
                 .from('ekatraa2025')
@@ -126,7 +132,7 @@ export default function ProfileScreen() {
 
             setVendor(data);
             setEditData(data);
-            
+
             // Load signed URL for logo if it exists
             if (data.logo_url && !data.logo_url.startsWith('file') && !data.logo_url.startsWith('content')) {
                 const signedUrl = await getImageUrl(data.logo_url);
@@ -214,11 +220,11 @@ export default function ProfileScreen() {
             console.log('[DEBUG] Uploading:', fileName, 'URI:', uri);
 
             let fileData: ArrayBuffer;
-            
+
             // Handle local file URIs (file:// or content://)
             if (uri.startsWith('file://') || uri.startsWith('content://') || uri.startsWith('ph://')) {
                 // Read file as base64 using expo-file-system
-                const base64 = await FileSystem.readAsStringAsync(uri, {
+                const base64 = await readAsStringAsync(uri, {
                     encoding: 'base64' as any,
                 });
                 // Convert base64 to ArrayBuffer
@@ -310,7 +316,7 @@ export default function ProfileScreen() {
             icon: Shield,
             label: 'Identity Verification',
             subtitle: 'KYC and documents',
-            badge: vendor?.is_verified ? 'Verified' : 'Pending',
+            badge: vendor?.is_verified === true ? 'Verified' : 'Pending',
             onPress: () => router.push('/onboarding/verify')
         },
         {
@@ -340,15 +346,19 @@ export default function ProfileScreen() {
             visible={visible}
             onRequestClose={() => setVisible(false)}
         >
+            <KeyboardAvoidingView
+                behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
+                className="flex-1"
+            >
             <View className="flex-1 justify-end bg-black/50">
-                <View className="bg-white rounded-t-[40px] p-8 pb-12">
+                <View className="rounded-t-[40px] p-8 pb-12" style={{ backgroundColor: colors.surface, maxHeight: '90%' }}>
                     <View className="flex-row justify-between items-center mb-8">
-                        <Text className="text-2xl font-bold text-accent-dark">{title}</Text>
+                        <Text className="text-2xl font-bold" style={{ color: colors.text }}>{title}</Text>
                         <TouchableOpacity onPress={() => setVisible(false)}>
                             <X size={24} color="#4B5563" />
                         </TouchableOpacity>
                     </View>
-                    <ScrollView showsVerticalScrollIndicator={false}>
+                    <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
                         {children}
                         <TouchableOpacity
                             onPress={onSave}
@@ -360,6 +370,7 @@ export default function ProfileScreen() {
                     </ScrollView>
                 </View>
             </View>
+            </KeyboardAvoidingView>
         </Modal>
     );
 
@@ -395,7 +406,8 @@ export default function ProfileScreen() {
                     <Text className="font-medium mt-1" style={{ color: colors.textSecondary }}>{vendor?.category || 'Category Not Set'}</Text>
 
                     <View className="flex-row items-center mt-4">
-                        {vendor?.is_verified ? (
+                        {/* Show verified status based on is_verified column - this is the primary verification flag */}
+                        {vendor?.is_verified === true ? (
                             <View className="flex-row items-center bg-green-50 px-4 py-1.5 rounded-full border border-green-100">
                                 <Check size={14} color="#10B981" className="mr-2" />
                                 <Text className="text-green-700 font-bold text-xs uppercase tracking-wider">Verified Vendor</Text>
@@ -403,7 +415,7 @@ export default function ProfileScreen() {
                         ) : (
                             <View className="flex-row items-center bg-orange-50 px-4 py-1.5 rounded-full border border-orange-100">
                                 <View className="w-2 h-2 bg-orange-400 rounded-full mr-2" />
-                                <Text className="text-orange-700 font-bold text-xs uppercase tracking-wider">Upgrade to Pro</Text>
+                                <Text className="text-orange-700 font-bold text-xs uppercase tracking-wider">Not Verified</Text>
                             </View>
                         )}
                     </View>
@@ -412,7 +424,7 @@ export default function ProfileScreen() {
                 <QuickHelp
                     id="profile_help"
                     title="Quick Help"
-                    description="Need help setting up your profile or managing bookings? Visit our help center or contact support."
+                    description="Need help setting up your profile or managing orders? Visit our help center or contact support."
                     actionText="View Walkthrough"
                     onAction={() => console.log('View Walkthrough')}
                 />
@@ -470,11 +482,13 @@ export default function ProfileScreen() {
                 {renderModal(payoutModal, setPayoutModal, 'Payout Methods', (
                     <View className="space-y-6">
                         <View>
-                            <Text className="text-sm font-bold text-accent-dark mb-2 uppercase tracking-widest text-[10px]">Bank Name</Text>
+                            <Text className="text-sm font-bold mb-2 uppercase tracking-widest text-[10px]" style={{ color: colors.text }}>Bank Name</Text>
                             <TextInput
                                 value={editData.bank_name}
                                 onChangeText={(t) => setEditData({ ...editData, bank_name: t })}
-                                className="bg-gray-50 border border-gray-100 rounded-2xl px-4 py-4 text-black font-semibold"
+                                className="rounded-2xl px-4 py-4 font-semibold"
+                                style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, color: colors.text }}
+                                placeholderTextColor={colors.textSecondary}
                                 placeholder="e.g. HDFC Bank"
                             />
                         </View>
@@ -553,7 +567,7 @@ export default function ProfileScreen() {
 
                         <View className="flex-row items-center justify-between bg-surface p-4 rounded-2xl">
                             <View>
-                                <Text className="text-accent-dark font-bold">New Booking Alerts</Text>
+                                <Text className="font-bold" style={{ color: colors.text }}>New Order Alerts</Text>
                                 <Text className="text-accent text-[10px]">Get notified when a client books</Text>
                             </View>
                             <TouchableOpacity className="w-14 h-8 rounded-full bg-primary items-center justify-center">

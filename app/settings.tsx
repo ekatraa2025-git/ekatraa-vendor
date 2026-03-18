@@ -6,6 +6,7 @@ import { ChevronLeft, Moon, Bell, Languages, X, Check, Sun } from 'lucide-react-
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../context/ThemeContext';
 import { refreshTranslations } from '../lib/i18n';
+import BottomNav from '../components/BottomNav';
 
 const languages = [
     { code: 'en', name: 'English', native: 'English' },
@@ -102,10 +103,13 @@ export default function SettingsScreen() {
                     </View>
                 </View>
 
-                <View className="mt-10 items-center pb-12">
+                <View className="mt-10 items-center pb-32">
                     <Text className="text-[10px] font-bold uppercase tracking-widest" style={{ color: colors.accentLight }}>Global Ekatraa Settings</Text>
                 </View>
             </ScrollView>
+
+            {/* Bottom Navigation */}
+            <BottomNav />
 
             {/* Language Selection Modal */}
             <Modal

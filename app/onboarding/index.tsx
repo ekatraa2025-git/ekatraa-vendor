@@ -10,16 +10,15 @@ import { supabase } from '../../lib/supabase';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../../context/ThemeContext';
 import Constants from 'expo-constants';
-// @ts-ignore - Using legacy API for compatibility
-import * as FileSystem from 'expo-file-system/legacy';
+import { readAsStringAsync } from 'expo-file-system/legacy';
 
 // Helper function to get signed URL from file path or existing URL
 const getImageUrl = async (urlOrPath: string | null | undefined): Promise<string> => {
     if (!urlOrPath) return '';
-    
+
     try {
         let fileName = urlOrPath;
-        
+
         // If it's already a full URL, extract the filename
         if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
             // Extract filename from Supabase storage URL
@@ -38,7 +37,7 @@ const getImageUrl = async (urlOrPath: string | null | undefined): Promise<string
             // Extract filename from path
             fileName = urlOrPath.split('/').pop() || urlOrPath;
         }
-        
+
         // Generate signed URL (valid for 24 hours for better caching)
         const { data, error } = await supabase.storage
             .from('ekatraa2025')
@@ -112,13 +111,13 @@ export default function OnboardingScreen() {
         try {
             setLoadingCategories(true);
             console.log('[CATEGORIES] Starting fetch...');
-            
+
             // Try selecting all columns first to debug
             const { data: allData, error: allError } = await supabase
                 .from('vendor_categories')
                 .select('*')
                 .order('name', { ascending: true });
-            
+
             console.log('[CATEGORIES] Query result:', {
                 hasData: !!allData,
                 dataLength: allData?.length,
@@ -130,39 +129,39 @@ export default function OnboardingScreen() {
                 } : null,
                 firstItem: allData?.[0]
             });
-            
+
             if (allError) {
                 console.error('[CATEGORIES] Query error:', allError);
-                
+
                 // If permission error, try API endpoint
-                if (allError.code === 'PGRST116' || allError.code === '42501' || 
-                    allError.message?.includes('permission') || 
+                if (allError.code === 'PGRST116' || allError.code === '42501' ||
+                    allError.message?.includes('permission') ||
                     allError.message?.includes('policy') ||
                     allError.message?.includes('row-level security')) {
                     console.warn('[CATEGORIES] Permission denied, trying API endpoint');
-                    
-                    const apiUrl = process.env.EXPO_PUBLIC_API_URL || 
+
+                    const apiUrl = process.env.EXPO_PUBLIC_API_URL ||
                         (Constants.expoConfig?.extra?.EXPO_PUBLIC_API_URL) ||
                         (Constants.expoConfig?.extra?.API_URL);
-                    
+
                     console.log('[CATEGORIES] API URL:', apiUrl);
-                    
+
                     if (apiUrl) {
                         try {
                             const response = await fetch(`${apiUrl}/api/categories`);
                             console.log('[CATEGORIES] API response status:', response.status);
-                            
+
                             if (response.ok) {
                                 const apiData = await response.json();
                                 console.log('[CATEGORIES] API data received:', apiData?.length, apiData);
-                                
+
                                 if (apiData && Array.isArray(apiData) && apiData.length > 0) {
                                     // Map API data to expected format
                                     const mappedData = apiData.map((item: any) => ({
                                         id: item.id || item.category_id || String(item.name),
                                         name: item.name || item.category_name || String(item.id)
                                     }));
-                                    
+
                                     console.log('[CATEGORIES] Mapped API data:', mappedData);
                                     setCategories(mappedData);
                                     return;
@@ -180,7 +179,7 @@ export default function OnboardingScreen() {
                 }
                 return;
             }
-            
+
             // Process the data if we got it
             if (allData && Array.isArray(allData) && allData.length > 0) {
                 // Map the data to ensure we have id and name
@@ -188,10 +187,10 @@ export default function OnboardingScreen() {
                     // Try different possible column names
                     const id = item.id || item.category_id || item.uuid || String(item.name || '');
                     const name = item.name || item.category_name || item.title || item.label || String(item.id || '');
-                    
+
                     return { id, name };
                 }).filter((item: any) => item.id && item.name);
-                
+
                 if (mappedData.length > 0) {
                     console.log('[CATEGORIES] Successfully loaded:', mappedData.length, 'categories');
                     console.log('[CATEGORIES] Sample:', mappedData.slice(0, 3));
@@ -337,11 +336,11 @@ export default function OnboardingScreen() {
             console.log('[DEBUG] Uploading:', fileName, 'URI:', uri);
 
             let fileData: ArrayBuffer;
-            
+
             // Handle local file URIs (file:// or content://)
             if (uri.startsWith('file://') || uri.startsWith('content://') || uri.startsWith('ph://')) {
                 // Read file as base64 using expo-file-system
-                const base64 = await FileSystem.readAsStringAsync(uri, {
+                const base64 = await readAsStringAsync(uri, {
                     encoding: 'base64' as any,
                 });
                 // Convert base64 to ArrayBuffer
@@ -454,39 +453,44 @@ export default function OnboardingScreen() {
             onRequestClose={() => setShowCategoryModal(false)}
         >
             <View className="flex-1 justify-end bg-black/50">
-                <View className="bg-white rounded-t-3xl h-[60%] p-6">
+                <View className="rounded-t-3xl h-[60%] p-6" style={{ backgroundColor: colors.surface }}>
                     <View className="flex-row justify-between items-center mb-6">
-                        <Text className="text-xl font-bold text-accent-dark">{t('select_category')}</Text>
+                        <Text className="text-xl font-bold" style={{ color: colors.text }}>{t('select_category')}</Text>
                         <TouchableOpacity onPress={() => setShowCategoryModal(false)}>
-                            <X size={24} color="#6B7280" />
+                            <X size={24} color={colors.textSecondary} />
                         </TouchableOpacity>
                     </View>
                     {loadingCategories ? (
                         <View className="flex-1 items-center justify-center py-20">
                             <ActivityIndicator size="large" color="#FF6B00" />
-                            <Text className="text-accent mt-4 font-bold">{t('loading')}</Text>
+                            <Text className="mt-4 font-bold" style={{ color: colors.textSecondary }}>{t('loading')}</Text>
                         </View>
                     ) : categories.length === 0 ? (
                         <View className="flex-1 items-center justify-center py-20">
-                            <Text className="text-accent font-bold">{t('no_categories_found')}</Text>
+                            <Text className="font-bold" style={{ color: colors.textSecondary }}>{t('no_categories_found')}</Text>
                         </View>
                     ) : (
                         <FlatList
                             data={categories}
                             keyExtractor={(item) => item.id}
                             renderItem={({ item }) => (
-                            <TouchableOpacity
-                                onPress={() => {
-                                    setFormData({ ...formData, category: item.name, categoryId: item.id });
-                                    setShowCategoryModal(false);
-                                }}
-                                className={`py-4 px-4 rounded-xl mb-2 flex-row items-center justify-between ${formData.category === item.name ? 'bg-primary/10 border border-primary/20' : 'bg-gray-50'}`}
-                            >
-                                <Text className={`text-base font-bold ${formData.category === item.name ? 'text-primary' : 'text-accent-dark'}`}>
-                                    {item.name}
-                                </Text>
-                                {formData.category === item.name && <Check size={20} color="#FF6B00" />}
-                            </TouchableOpacity>
+                                <TouchableOpacity
+                                    onPress={() => {
+                                        setFormData({ ...formData, category: item.name, categoryId: item.id });
+                                        setShowCategoryModal(false);
+                                    }}
+                                    className="py-4 px-4 rounded-xl mb-2 flex-row items-center justify-between"
+                                    style={{
+                                        backgroundColor: formData.category === item.name ? colors.primary + '1A' : colors.background,
+                                        borderWidth: formData.category === item.name ? 1 : 0,
+                                        borderColor: formData.category === item.name ? colors.primary + '33' : 'transparent'
+                                    }}
+                                >
+                                    <Text className="text-base font-bold" style={{ color: formData.category === item.name ? colors.primary : colors.text }}>
+                                        {item.name}
+                                    </Text>
+                                    {formData.category === item.name && <Check size={20} color="#FF6B00" />}
+                                </TouchableOpacity>
                             )}
                             showsVerticalScrollIndicator={false}
                         />
@@ -498,8 +502,8 @@ export default function OnboardingScreen() {
 
     const renderStep1 = () => (
         <View className="flex-1">
-            <Text className="text-3xl font-bold text-accent-dark mb-2">{t('business_profile')}</Text>
-            <Text className="text-accent text-base mb-8">{t('tell_us_about_business')}</Text>
+            <Text className="text-3xl font-bold mb-2" style={{ color: colors.text }}>{t('business_profile')}</Text>
+            <Text className="text-base mb-8" style={{ color: colors.textSecondary }}>{t('tell_us_about_business')}</Text>
 
             <View className="items-center mb-10">
                 <TouchableOpacity
@@ -526,7 +530,7 @@ export default function OnboardingScreen() {
                     ) : (
                         <View className="items-center">
                             <Camera size={40} color="#FF6B00" strokeWidth={1.5} />
-                            <Text className="text-xs text-accent mt-2 font-bold uppercase tracking-widest text-center px-4">{t('upload_logo_or_profile')}</Text>
+                            <Text className="text-xs mt-2 font-bold uppercase tracking-widest text-center px-4" style={{ color: colors.textSecondary }}>{t('upload_logo_or_profile')}</Text>
                         </View>
                     )}
                     <View className="absolute bottom-2 right-2 bg-primary p-2.5 rounded-2xl border-4 border-white shadow-md">
@@ -537,22 +541,22 @@ export default function OnboardingScreen() {
 
             <View className="space-y-6">
                 <View>
-                    <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">{t('business_name')}</Text>
-                    <View className="flex-row items-center bg-white border-2 border-gray-100 rounded-2xl px-4 py-4 focus:border-primary">
-                        <Store size={22} color="#000000" className="mr-3" strokeWidth={2.5} />
+                    <Text className="text-sm font-bold mb-2 ml-1" style={{ color: colors.text }}>{t('business_name')}</Text>
+                    <View className="flex-row items-center rounded-2xl px-4 py-4" style={{ backgroundColor: colors.background, borderWidth: 2, borderColor: colors.border }}>
+                        <Store size={22} color={colors.text} className="mr-3" strokeWidth={2.5} />
                         <TextInput
                             placeholder={t('business_name_placeholder')}
-                            placeholderTextColor="#9CA3AF"
+                            placeholderTextColor={colors.textSecondary}
                             value={formData.businessName}
                             onChangeText={(text) => setFormData({ ...formData, businessName: text })}
-                            className="flex-1 text-black font-extrabold text-lg py-1"
-                            style={{ color: '#000000' }}
+                            className="flex-1 font-extrabold text-lg py-1"
+                            style={{ color: colors.text }}
                         />
                     </View>
                 </View>
 
                 <View className="mt-4">
-                    <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">{t('business_category')}</Text>
+                    <Text className="text-sm font-bold mb-2 ml-1" style={{ color: colors.text }}>{t('business_category')}</Text>
                     <TouchableOpacity
                         onPress={async () => {
                             if (categories.length === 0) {
@@ -560,27 +564,34 @@ export default function OnboardingScreen() {
                             }
                             setShowCategoryModal(true);
                         }}
-                        className="flex-row items-center bg-white border-2 border-gray-100 rounded-2xl px-4 py-4"
+                        className="flex-row items-center rounded-2xl px-4 py-4"
+                        style={{ backgroundColor: colors.background, borderWidth: 2, borderColor: colors.border }}
                     >
-                        <Tag size={22} color="#000000" className="mr-3" strokeWidth={2.5} />
-                        <Text className={`flex-1 font-extrabold text-lg ${formData.category ? 'text-black' : 'text-gray-400'}`}>
+                        <Tag size={22} color={colors.text} className="mr-3" strokeWidth={2.5} />
+                        <Text className="flex-1 font-extrabold text-lg" style={{ color: formData.category ? colors.text : colors.textSecondary }}>
                             {formData.category || t('select_category')}
                         </Text>
-                        <ChevronDown size={22} color="#9CA3AF" />
+                        <ChevronDown size={22} color={colors.textSecondary} />
                     </TouchableOpacity>
                 </View>
 
                 <View className="mt-4">
-                    <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">{t('brief_description')}</Text>
+                    <Text className="text-sm font-bold mb-2 ml-1" style={{ color: colors.text }}>{t('brief_description')}</Text>
                     <TextInput
                         placeholder={t('description_placeholder')}
-                        placeholderTextColor="#9CA3AF"
+                        placeholderTextColor={colors.textSecondary}
                         multiline
                         numberOfLines={4}
                         value={formData.description}
                         onChangeText={(text) => setFormData({ ...formData, description: text })}
-                        className="bg-white border-2 border-gray-100 rounded-3xl px-5 py-5 text-black font-bold text-base h-32"
-                        style={{ textAlignVertical: 'top' }}
+                        className="rounded-3xl px-5 py-5 font-bold text-base h-32"
+                        style={{ 
+                            textAlignVertical: 'top',
+                            backgroundColor: colors.background,
+                            borderWidth: 2,
+                            borderColor: colors.border,
+                            color: colors.text
+                        }}
                     />
                 </View>
             </View>
@@ -590,18 +601,20 @@ export default function OnboardingScreen() {
 
     const renderStep2 = () => (
         <View className="flex-1">
-            <Text className="text-3xl font-bold text-accent-dark mb-2">{t('location_and_contact')}</Text>
-            <Text className="text-accent text-base mb-8">{t('where_can_clients_reach')}</Text>
+            <Text className="text-3xl font-bold mb-2" style={{ color: colors.text }}>{t('location_and_contact')}</Text>
+            <Text className="text-base mb-8" style={{ color: colors.textSecondary }}>{t('where_can_clients_reach')}</Text>
 
             <View className="space-y-6">
                 <View>
-                    <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">{t('official_phone_number')}</Text>
-                    <View className="flex-row items-center bg-gray-50 border-2 border-gray-100 rounded-2xl px-4 py-4">
-                        <Text className="text-accent font-extrabold text-lg mr-3">+91</Text>
+                    <Text className="text-sm font-bold mb-2 ml-1" style={{ color: colors.text }}>{t('official_phone_number')}</Text>
+                    <View className="flex-row items-center rounded-2xl px-4 py-4" style={{ backgroundColor: colors.background, borderWidth: 2, borderColor: colors.border }}>
+                        <Text className="font-extrabold text-lg mr-3" style={{ color: colors.text }}>+91</Text>
                         <TextInput
                             value={formData.phone}
                             editable={false}
-                            className="flex-1 text-black font-extrabold text-lg py-1"
+                            className="flex-1 font-extrabold text-lg py-1"
+                            style={{ color: colors.text }}
+                            placeholderTextColor={colors.textSecondary}
                         />
                         <View className="bg-green-100 p-1 rounded-full">
                             <Check size={16} color="#059669" strokeWidth={3} />
@@ -611,10 +624,10 @@ export default function OnboardingScreen() {
                 </View>
 
                 <View className="mt-4">
-                    <Text className="text-sm font-bold text-accent-dark mb-2 ml-1">{t('service_location_address')}</Text>
-                    <View className="bg-white border-2 border-gray-100 rounded-3xl p-3">
-                        <View className="flex-row items-center justify-between px-3 py-2 border-b border-gray-100 mb-2">
-                            <Text className="text-accent text-[10px] font-bold uppercase tracking-widest">{t('pinpoint_on_map')}</Text>
+                    <Text className="text-sm font-bold mb-2 ml-1" style={{ color: colors.text }}>{t('service_location_address')}</Text>
+                    <View className="rounded-3xl p-3" style={{ backgroundColor: colors.background, borderWidth: 2, borderColor: colors.border }}>
+                        <View className="flex-row items-center justify-between px-3 py-2 mb-2" style={{ borderBottomWidth: 1, borderBottomColor: colors.border }}>
+                            <Text className="text-[10px] font-bold uppercase tracking-widest" style={{ color: colors.text }}>{t('pinpoint_on_map')}</Text>
                             <TouchableOpacity
                                 onPress={getCurrentLocation}
                                 className="flex-row items-center bg-primary/10 px-3 py-1.5 rounded-full"
@@ -624,29 +637,30 @@ export default function OnboardingScreen() {
                             </TouchableOpacity>
                         </View>
                         <View className="flex-row items-start px-2 py-2">
-                            <MapPin size={24} color="#000000" className="mr-3 mt-1" strokeWidth={2} />
+                            <MapPin size={24} color={colors.text} className="mr-3 mt-1" strokeWidth={2} />
                             <TextInput
                                 placeholder={t('search_area_or_address')}
-                                placeholderTextColor="#9CA3AF"
+                                placeholderTextColor={colors.textSecondary}
                                 multiline
                                 numberOfLines={4}
                                 value={locationQuery}
                                 onChangeText={setLocationQuery}
-                                className="flex-1 text-black font-extrabold text-lg"
-                                style={{ textAlignVertical: 'top', minHeight: 100 }}
+                                className="flex-1 font-extrabold text-lg"
+                                style={{ textAlignVertical: 'top', minHeight: 100, color: colors.text }}
                             />
                         </View>
 
                         {suggestions.length > 0 && (
-                            <View className="border-t border-gray-50 pt-2 px-2 pb-2 mt-2">
+                            <View className="pt-2 px-2 pb-2 mt-2" style={{ borderTopWidth: 1, borderTopColor: colors.border }}>
                                 {suggestions.map((loc, idx) => (
                                     <TouchableOpacity
                                         key={idx}
                                         onPress={() => selectSuggestion(loc)}
-                                        className="flex-row items-center py-4 border-b border-gray-50 bg-gray-50/50 rounded-xl px-4 mb-2"
+                                        className="flex-row items-center py-4 rounded-xl px-4 mb-2"
+                                        style={{ borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.surface }}
                                     >
-                                        <Search size={16} color="#4B5563" className="mr-3" />
-                                        <Text className="text-accent-dark font-bold text-sm flex-1" numberOfLines={1}>{loc}</Text>
+                                        <Search size={16} color={colors.textSecondary} className="mr-3" />
+                                        <Text className="font-bold text-sm flex-1" style={{ color: colors.text }} numberOfLines={1}>{loc}</Text>
                                     </TouchableOpacity>
                                 ))}
                             </View>
@@ -663,7 +677,7 @@ export default function OnboardingScreen() {
                 <>
                     <Text className="text-3xl font-bold text-accent-dark mb-2">{t('your_listings')}</Text>
                     <Text className="text-accent text-base mb-8">
-                        {serviceCount === 1 
+                        {serviceCount === 1
                             ? t('you_have_service_active', { count: serviceCount })
                             : t('you_have_services_active', { count: serviceCount })
                         }
@@ -807,10 +821,11 @@ export default function OnboardingScreen() {
             </View>
 
             <KeyboardAvoidingView
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
                 className="flex-1"
+                keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
             >
-                <ScrollView contentContainerStyle={{ flexGrow: 1 }} className="px-6 pt-10 pb-12">
+                <ScrollView contentContainerStyle={{ flexGrow: 1 }} className="px-6 pt-10 pb-12" keyboardShouldPersistTaps="handled">
                     {fetching ? (
                         <View className="flex-1 items-center justify-center py-20">
                             <ActivityIndicator size="large" color="#FF6B00" />

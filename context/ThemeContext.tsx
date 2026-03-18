@@ -26,32 +26,33 @@ interface ThemeContextType {
     setThemeMode: (mode: ThemeMode) => void;
 }
 
+// Match ekatraa user app: Primary #FF7A00, Secondary #1E3A8A
 const lightColors: ThemeColors = {
-    background: '#FFFFFF',
-    surface: '#F9FAFB',
+    background: '#F7F8FA',
+    surface: '#FFFFFF',
     text: '#1F2937',
-    textSecondary: '#4B5563',
+    textSecondary: '#6B7280',
     border: '#E5E7EB',
-    primary: '#FF6B00',
-    primaryDark: '#E65100',
-    primaryLight: '#FF9E40',
-    accent: '#4B5563',
-    accentDark: '#1F2937',
-    accentLight: '#9CA3AF',
+    primary: '#FF7A00',
+    primaryDark: '#E66A00',
+    primaryLight: '#FFA040',
+    accent: '#1E3A8A',
+    accentDark: '#1E3A8A',
+    accentLight: '#3B82F6',
 };
 
 const darkColors: ThemeColors = {
-    background: '#111827',
-    surface: '#1F2937',
+    background: '#0F1117',
+    surface: '#1A1D27',
     text: '#F9FAFB',
-    textSecondary: '#D1D5DB',
-    border: '#374151',
-    primary: '#FF6B00',
-    primaryDark: '#E65100',
-    primaryLight: '#FF9E40',
-    accent: '#9CA3AF',
-    accentDark: '#F9FAFB',
-    accentLight: '#6B7280',
+    textSecondary: '#9CA3AF',
+    border: '#2D3142',
+    primary: '#FF8C1A',
+    primaryDark: '#E66A00',
+    primaryLight: '#FFB060',
+    accent: '#3B82F6',
+    accentDark: '#60A5FA',
+    accentLight: '#93C5FD',
 };
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
@@ -77,12 +78,22 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
     const loadThemePreference = async () => {
         try {
-            const savedTheme = await SecureStore.getItemAsync(THEME_STORAGE_KEY);
+            // Add timeout to prevent blocking
+            const timeoutPromise = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Theme load timeout')), 2000)
+            );
+            
+            const savedTheme = await Promise.race([
+                SecureStore.getItemAsync(THEME_STORAGE_KEY),
+                timeoutPromise
+            ]) as string | null;
+            
             if (savedTheme && ['light', 'dark', 'system'].includes(savedTheme)) {
                 setThemeModeState(savedTheme as ThemeMode);
             }
         } catch (error) {
             console.warn('Failed to load theme preference:', error);
+            // Continue with default theme
         } finally {
             setIsLoading(false);
         }

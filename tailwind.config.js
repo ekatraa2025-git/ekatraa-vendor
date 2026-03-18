@@ -6,22 +6,22 @@ module.exports = {
     extend: {
       colors: {
         primary: {
-          DEFAULT: '#FF6B00', // Vibrant Orange from logo
-          dark: '#E65100',
-          light: '#FF9E40',
+          DEFAULT: '#FF7A00', // Match ekatraa user app
+          dark: '#E66A00',
+          light: '#FFA040',
         },
         secondary: {
-          DEFAULT: '#FF3D00', // Deep Orange/Red from logo
-          dark: '#DD2C00',
-          light: '#FF6E40',
+          DEFAULT: '#1E3A8A', // Secondary blue from user app
+          dark: '#1E3A8A',
+          light: '#3B82F6',
         },
         accent: {
-          DEFAULT: '#4B5563', // Gray from logo text
-          dark: '#1F2937',
-          light: '#9CA3AF',
+          DEFAULT: '#1E3A8A',
+          dark: '#3B82F6',
+          light: '#60A5FA',
         },
-        background: '#FFFFFF',
-        surface: '#F9FAFB',
+        background: '#F7F8FA',
+        surface: '#FFFFFF',
       },
       fontFamily: {
         sans: ['Inter', 'sans-serif'],

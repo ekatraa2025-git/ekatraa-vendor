@@ -47,14 +47,17 @@ export default function LoginScreen() {
     return (
         <SafeAreaView className="flex-1" style={{ backgroundColor: colors.background }}>
             <KeyboardAvoidingView
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
                 className="flex-1"
+                keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
             >
-                <ScrollView contentContainerStyle={{ flexGrow: 1 }} className="px-6">
+                <ScrollView contentContainerStyle={{ flexGrow: 1 }} className="px-6" keyboardShouldPersistTaps="handled">
                     <View className="flex-1 justify-center py-12">
-                        <View className="items-center mb-10">
-                            <Logo width={128} height={128} />
-                            <View className="mt-6 px-4">
+                        <View style={{ width: '100%', alignItems: 'center', justifyContent: 'center' }} className="mb-10">
+                            <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                                <Logo width={128} height={128} />
+                            </View>
+                            <View className="mt-6 px-4" style={{ alignItems: 'center' }}>
                                 <Text className="text-center text-sm font-medium italic leading-5 mb-1" style={{ color: colors.textSecondary }}>
                                     "Celebrating Togetherness with Trust and Care"
                                 </Text>

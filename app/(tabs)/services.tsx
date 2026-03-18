@@ -1,16 +1,30 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Image, FlatList, ActivityIndicator, Modal, TextInput, Alert, RefreshControl } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Image, FlatList, ActivityIndicator, Modal, TextInput, Alert, RefreshControl, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Plus, Edit3, Trash2, Eye, Star, ChevronRight, X, Check, Store } from 'lucide-react-native';
+import { Plus, Edit3, Trash2, Eye, Star, ChevronRight, X, Check, Store, ChevronDown } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
 import { useTheme } from '../../context/ThemeContext';
-// @ts-ignore - Using legacy API for compatibility
-import * as FileSystem from 'expo-file-system/legacy';
+import { readAsStringAsync } from 'expo-file-system/legacy';
+import Constants from 'expo-constants';
 
 import * as ImagePicker from 'expo-image-picker';
 
+const PRICING_TIER_LABELS: Record<string, string> = {
+    basic: 'Basic',
+    classic_value: 'Classic Value',
+    signature: 'Signature',
+    prestige: 'Prestige',
+    royal: 'Royal',
+    imperial: 'Imperial',
+    standard: 'Signature',
+    premium: 'Prestige',
+};
+function getPricingTierLabel(key: string): string {
+    return PRICING_TIER_LABELS[key] ?? (key ? key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, ' ') : '');
+}
+
 export default function ServicesScreen() {
-    const { colors } = useTheme();
+    const { colors, isDarkMode } = useTheme();
     const [loading, setLoading] = useState(true);
     const [services, setServices] = useState<any[]>([]);
     const [editModalVisible, setEditModalVisible] = useState(false);
@@ -21,13 +35,83 @@ export default function ServicesScreen() {
     const [previewModalVisible, setPreviewModalVisible] = useState(false);
     const [previewServiceData, setPreviewServiceData] = useState<any>(null);
     const [refreshing, setRefreshing] = useState(false);
+    const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
+    const [categoryPickerVisible, setCategoryPickerVisible] = useState(false);
+    const [catalogServices, setCatalogServices] = useState<any[]>([]);
+    const [catalogServicePickerVisible, setCatalogServicePickerVisible] = useState(false);
+    const [pricingTypePickerVisible, setPricingTypePickerVisible] = useState(false);
+    const [selectedCatalogService, setSelectedCatalogService] = useState<any>(null);
     // Cache for image URLs to avoid repeated API calls
     const imageUrlCache: { [key: string]: string } = {};
 
     useEffect(() => {
         console.log('[DEBUG] ServicesScreen mounted');
         fetchServices();
+        fetchCategories();
     }, []);
+
+    const fetchCategories = async () => {
+        try {
+            const apiUrl = process.env.EXPO_PUBLIC_API_URL ||
+                (Constants.expoConfig?.extra?.EXPO_PUBLIC_API_URL) ||
+                (Constants.expoConfig?.extra?.API_URL);
+
+            if (apiUrl) {
+                // Prefer new flow: /api/public/categories (catalog categories)
+                let response = await fetch(`${apiUrl}/api/public/categories`);
+                if (response.ok) {
+                    const apiData = await response.json();
+                    if (apiData && Array.isArray(apiData) && apiData.length > 0) {
+                        const mappedData = apiData.map((item: any) => ({
+                            id: item.id || String(item.name),
+                            name: item.name || String(item.id),
+                            icon_url: item.icon_url,
+                            display_order: item.display_order,
+                        }));
+                        setCategories(mappedData);
+                        return;
+                    }
+                }
+                // Fallback: legacy /api/categories (vendor_categories)
+                response = await fetch(`${apiUrl}/api/categories`);
+                if (response.ok) {
+                    const apiData = await response.json();
+                    if (apiData && Array.isArray(apiData) && apiData.length > 0) {
+                        const mappedData = apiData.map((item: any) => ({
+                            id: item.id || String(item.name),
+                            name: item.name || String(item.id)
+                        }));
+                        setCategories(mappedData);
+                        return;
+                    }
+                }
+            }
+            console.warn('[CATEGORIES] Failed to fetch categories from API');
+        } catch (error) {
+            console.error('[CATEGORIES] Error fetching categories:', error);
+        }
+    };
+
+    const fetchCatalogServices = async (categoryId: string) => {
+        try {
+            const apiUrl = process.env.EXPO_PUBLIC_API_URL ||
+                (Constants.expoConfig?.extra?.EXPO_PUBLIC_API_URL) ||
+                (Constants.expoConfig?.extra?.API_URL);
+
+            if (apiUrl) {
+                const response = await fetch(`${apiUrl}/api/public/services?category_id=${categoryId}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    setCatalogServices(Array.isArray(data) ? data : []);
+                    return;
+                }
+            }
+            console.warn('[CATALOG_SERVICES] Failed to fetch catalog services from API');
+        } catch (error) {
+            console.error('[CATALOG_SERVICES] Error fetching catalog services:', error);
+        }
+        setCatalogServices([]);
+    };
 
     const onRefresh = async () => {
         setRefreshing(true);
@@ -38,7 +122,7 @@ export default function ServicesScreen() {
     // Helper function to get signed URL from file path or existing URL
     const getImageUrl = async (urlOrPath: string | null | undefined): Promise<string> => {
         if (!urlOrPath) return '';
-        
+
         try {
             // Check cache first
             if (imageUrlCache[urlOrPath]) {
@@ -46,7 +130,7 @@ export default function ServicesScreen() {
             }
 
             let fileName = urlOrPath;
-            
+
             // If it's already a full URL, extract the filename
             if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
                 // If it's already a signed URL with token, return as-is
@@ -67,7 +151,7 @@ export default function ServicesScreen() {
                 // Extract filename from path
                 fileName = urlOrPath.split('/').pop() || urlOrPath;
             }
-            
+
             // Generate signed URL (valid for 24 hours for better caching)
             try {
                 const { data, error } = await supabase.storage
@@ -123,11 +207,11 @@ export default function ServicesScreen() {
             console.log('[DEBUG] Uploading:', fileName, 'URI:', uri);
 
             let fileData: ArrayBuffer;
-            
+
             // Handle local file URIs (file:// or content://)
             if (uri.startsWith('file://') || uri.startsWith('content://') || uri.startsWith('ph://')) {
                 // Read file as base64 using expo-file-system
-                const base64 = await FileSystem.readAsStringAsync(uri, {
+                const base64 = await readAsStringAsync(uri, {
                     encoding: 'base64' as any,
                 });
                 // Convert base64 to ArrayBuffer
@@ -203,7 +287,11 @@ export default function ServicesScreen() {
     };
 
     const handleSaveService = async () => {
-        if (!editingService?.name || !editingService?.price_amount) {
+        if (isNew && (!editingService?.category || !editingService?.name || !editingService?.price_amount)) {
+            Alert.alert('Required Fields', 'Please select category, catalog service, and pricing tier.');
+            return;
+        }
+        if (!isNew && (!editingService?.name || !editingService?.price_amount)) {
             Alert.alert('Required Fields', 'Please enter service name and price.');
             return;
         }
@@ -219,7 +307,7 @@ export default function ServicesScreen() {
                 imageUrls = [uploadedUrl];
             }
 
-            const serviceData = {
+            const serviceData: any = {
                 name: editingService.name,
                 price_amount: parseFloat(editingService.price_amount),
                 category: editingService.category || 'Service',
@@ -227,6 +315,8 @@ export default function ServicesScreen() {
                 image_urls: imageUrls,
                 vendor_id: user.id
             };
+            if (editingService.pricing_type) serviceData.pricing_type = editingService.pricing_type;
+            if (editingService.offerable_service_id) serviceData.offerable_service_id = editingService.offerable_service_id;
 
             let error;
             if (isNew) {
@@ -282,9 +372,11 @@ export default function ServicesScreen() {
     };
 
     const openAddModal = () => {
-        setEditingService({ name: '', price_amount: '', category: '', is_active: true });
+        setEditingService({ name: '', price_amount: '', category: '', category_id: '', pricing_type: '', offerable_service_id: '', is_active: true });
         setIsNew(true);
         setSelectedImage(null);
+        setSelectedCatalogService(null);
+        setCatalogServices([]);
         setEditModalVisible(true);
     };
 
@@ -321,21 +413,23 @@ export default function ServicesScreen() {
             loadImage();
         }, [imageUrl]);
 
+        const { colors } = useTheme();
+        
         if (!imageUrl) {
             return (
-                <View className="w-full h-48 bg-gray-100 items-center justify-center">
+                <View className="w-full h-48 items-center justify-center" style={{ backgroundColor: colors.surface }}>
                     <View className="items-center">
-                        <Store size={40} color="#9CA3AF" />
-                        <Text className="text-accent text-xs mt-2 font-bold">No Image</Text>
+                        <Store size={40} color={colors.textSecondary} />
+                        <Text className="text-xs mt-2 font-bold" style={{ color: colors.textSecondary }}>No Image</Text>
                     </View>
                 </View>
             );
         }
 
         return (
-            <View className="w-full h-48 bg-gray-100 relative">
+            <View className="w-full h-48 relative" style={{ backgroundColor: colors.surface }}>
                 {loading ? (
-                    <View className="absolute inset-0 items-center justify-center bg-gray-100">
+                    <View className="absolute inset-0 items-center justify-center" style={{ backgroundColor: colors.surface }}>
                         <ActivityIndicator size="large" color="#FF6B00" />
                     </View>
                 ) : displayUrl ? (
@@ -349,10 +443,10 @@ export default function ServicesScreen() {
                         }}
                     />
                 ) : (
-                    <View className="w-full h-full items-center justify-center bg-gray-100">
+                    <View className="w-full h-full items-center justify-center" style={{ backgroundColor: colors.surface }}>
                         <View className="items-center">
-                            <Store size={40} color="#9CA3AF" />
-                            <Text className="text-accent text-xs mt-2 font-bold">Image Not Available</Text>
+                            <Store size={40} color={colors.textSecondary} />
+                            <Text className="text-xs mt-2 font-bold" style={{ color: colors.textSecondary }}>Image Not Available</Text>
                         </View>
                     </View>
                 )}
@@ -364,13 +458,14 @@ export default function ServicesScreen() {
         <TouchableOpacity
             activeOpacity={0.9}
             onPress={() => openPreviewModal(item)}
-            className="bg-white border border-gray-100 rounded-[32px] overflow-hidden mb-6 shadow-sm"
+            className="rounded-[32px] overflow-hidden mb-6 shadow-sm"
+            style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }}
         >
             <View className="relative">
                 <ServiceImage imageUrl={item.image_urls?.[0]} />
-                <View className="absolute top-4 right-4 bg-white/90 px-3 py-1 rounded-full flex-row items-center">
+                <View className="absolute top-4 right-4 px-3 py-1 rounded-full flex-row items-center" style={{ backgroundColor: colors.surface + 'E6' }}>
                     <Star size={12} color="#FF6B00" fill="#FF6B00" />
-                    <Text className="text-accent-dark text-[10px] font-bold ml-1">4.8</Text>
+                    <Text className="text-[10px] font-bold ml-1" style={{ color: colors.text }}>4.8</Text>
                 </View>
                 <View className={`absolute top-4 left-4 ${item.is_active ? 'bg-green-500' : 'bg-gray-400'} px-3 py-1 rounded-full`}>
                     <Text className="text-white text-[10px] font-bold uppercase">{item.is_active ? 'Active' : 'Inactive'}</Text>
@@ -380,35 +475,35 @@ export default function ServicesScreen() {
             <View className="p-6">
                 <View className="flex-row justify-between items-start">
                     <View className="flex-1 mr-4">
-                        <Text className="text-accent text-[10px] uppercase font-bold tracking-widest">{item.category || 'Service'}</Text>
-                        <Text className="text-xl font-bold text-accent-dark mt-1" numberOfLines={1}>{item.name}</Text>
+                        <Text className="text-[10px] uppercase font-bold tracking-widest" style={{ color: colors.textSecondary }}>{item.category || 'Service'}</Text>
+                        <Text className="text-xl font-bold mt-1" numberOfLines={1} style={{ color: colors.text }}>{item.name}</Text>
                     </View>
-                    <Text className="text-primary font-bold text-lg">₹{item.price_amount}</Text>
+                    <Text className="font-bold text-lg" style={{ color: colors.primary }}>₹{item.price_amount}</Text>
                 </View>
 
-                <View className="flex-row items-center mt-6 pt-6 border-t border-gray-50">
+                <View className="flex-row items-center mt-6 pt-6" style={{ borderTopWidth: 1, borderTopColor: colors.border }}>
                     <TouchableOpacity
                         onPress={() => openEditModal(item)}
                         className="flex-1 flex-row items-center justify-center py-2"
                     >
-                        <Edit3 size={18} color="#4B5563" />
-                        <Text className="text-accent font-semibold ml-2">Edit</Text>
+                        <Edit3 size={18} color={colors.textSecondary} />
+                        <Text className="font-semibold ml-2" style={{ color: colors.textSecondary }}>Edit</Text>
                     </TouchableOpacity>
-                    <View className="w-[1px] h-6 bg-gray-100" />
+                    <View className="w-[1px] h-6" style={{ backgroundColor: colors.border }} />
                     <TouchableOpacity
                         onPress={() => openPreviewModal(item)}
                         className="flex-1 flex-row items-center justify-center py-2"
                     >
-                        <Eye size={18} color="#4B5563" />
-                        <Text className="text-accent font-semibold ml-2">Preview</Text>
+                        <Eye size={18} color={colors.textSecondary} />
+                        <Text className="font-semibold ml-2" style={{ color: colors.textSecondary }}>Preview</Text>
                     </TouchableOpacity>
-                    <View className="w-[1px] h-6 bg-gray-100" />
+                    <View className="w-[1px] h-6" style={{ backgroundColor: colors.border }} />
                     <TouchableOpacity
                         onPress={() => deleteService(item.id)}
                         className="flex-1 flex-row items-center justify-center py-2"
                     >
                         <Trash2 size={18} color="#EF4444" />
-                        <Text className="text-red-500 font-semibold ml-2">Delete</Text>
+                        <Text className="font-semibold ml-2" style={{ color: '#EF4444' }}>Delete</Text>
                     </TouchableOpacity>
                 </View>
             </View>
@@ -425,10 +520,10 @@ export default function ServicesScreen() {
 
     return (
         <SafeAreaView className="flex-1" style={{ backgroundColor: colors.background }}>
-            <View className="px-6 py-4 flex-row justify-between items-center bg-white z-10">
+            <View className="px-6 py-4 flex-row justify-between items-center z-10" style={{ backgroundColor: colors.surface }}>
                 <View>
-                    <Text className="text-2xl font-bold text-accent-dark">My Services</Text>
-                    <Text className="text-accent text-xs">Manage your product catalog</Text>
+                    <Text className="text-2xl font-bold" style={{ color: colors.text }}>My Services</Text>
+                    <Text className="text-xs" style={{ color: colors.textSecondary }}>Manage your product catalog</Text>
                 </View>
                 <TouchableOpacity
                     onPress={openAddModal}
@@ -454,7 +549,7 @@ export default function ServicesScreen() {
                 }
                 ListEmptyComponent={() => (
                     <View className="flex-1 items-center justify-center py-20">
-                        <Text className="text-accent font-medium">No services found</Text>
+                        <Text className="font-medium" style={{ color: colors.textSecondary }}>No services found</Text>
                         <TouchableOpacity
                             onPress={openAddModal}
                             className="mt-4 bg-primary px-6 py-3 rounded-xl"
@@ -466,11 +561,12 @@ export default function ServicesScreen() {
                 ListHeaderComponent={() => services.length > 0 ? (
                     <TouchableOpacity
                         onPress={openAddModal}
-                        className="bg-surface rounded-3xl p-6 mb-8 flex-row items-center"
+                        className="rounded-3xl p-6 mb-8 flex-row items-center"
+                        style={{ backgroundColor: colors.surface }}
                     >
                         <View className="flex-1">
-                            <Text className="text-accent-dark font-bold text-lg">Add New Listing</Text>
-                            <Text className="text-accent text-xs mt-1">Increase your reach by adding more items</Text>
+                            <Text className="font-bold text-lg" style={{ color: colors.text }}>Add New Listing</Text>
+                            <Text className="text-xs mt-1" style={{ color: colors.textSecondary }}>Increase your reach by adding more items</Text>
                         </View>
                         <ChevronRight size={20} color="#FF6B00" />
                     </TouchableOpacity>
@@ -484,20 +580,25 @@ export default function ServicesScreen() {
                 visible={editModalVisible}
                 onRequestClose={() => setEditModalVisible(false)}
             >
+                <KeyboardAvoidingView
+                    behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
+                    className="flex-1"
+                >
                 <View className="flex-1 justify-end bg-black/50">
-                    <View className="bg-white rounded-t-[40px] p-8 pb-12">
+                    <View className="rounded-t-[40px] p-8 pb-12" style={{ backgroundColor: colors.surface, maxHeight: '90%' }}>
                         <View className="flex-row justify-between items-center mb-8">
-                            <Text className="text-2xl font-bold text-accent-dark">{isNew ? 'New Service' : 'Edit Service'}</Text>
+                            <Text className="text-2xl font-bold" style={{ color: colors.text }}>{isNew ? 'New Service' : 'Edit Service'}</Text>
                             <TouchableOpacity onPress={() => setEditModalVisible(false)}>
-                                <X size={24} color="#4B5563" />
+                                <X size={24} color={colors.textSecondary} />
                             </TouchableOpacity>
                         </View>
 
-                        <ScrollView showsVerticalScrollIndicator={false}>
+                        <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
                             <View className="space-y-6">
                                 <TouchableOpacity
                                     onPress={pickImage}
-                                    className="bg-surface border-2 border-dashed border-gray-200 rounded-[32px] overflow-hidden mb-6 items-center justify-center h-48"
+                                    className="border-2 border-dashed rounded-[32px] overflow-hidden mb-6 items-center justify-center h-48"
+                                    style={{ backgroundColor: colors.background, borderColor: colors.border }}
                                 >
                                     {selectedImage ? (
                                         <Image
@@ -509,53 +610,133 @@ export default function ServicesScreen() {
                                         <ServiceImage imageUrl={editingService.image_urls[0]} />
                                     ) : (
                                         <View className="items-center">
-                                            <Plus size={32} color="#9CA3AF" />
-                                            <Text className="text-accent mt-2 font-bold text-xs uppercase tracking-widest">Add Photo</Text>
+                                            <Plus size={32} color={colors.textSecondary} />
+                                            <Text className="mt-2 font-bold text-xs uppercase tracking-widest" style={{ color: colors.textSecondary }}>Add Photo</Text>
                                         </View>
                                     )}
                                 </TouchableOpacity>
 
-                                <View>
-                                    <Text className="text-sm font-bold text-accent-dark mb-2 uppercase tracking-widest text-[10px]">Service Name</Text>
-                                    <TextInput
-                                        value={editingService?.name}
-                                        onChangeText={(t) => setEditingService({ ...editingService, name: t })}
-                                        className="bg-gray-50 border border-gray-100 rounded-2xl px-4 py-4 text-black font-semibold"
-                                        placeholder="Enter service name"
-                                    />
-                                </View>
+                                {isNew ? (
+                                    <>
+                                        {/* Category Dropdown */}
+                                        <View>
+                                            <Text className="text-sm font-bold mb-2 uppercase tracking-widest text-[10px]" style={{ color: colors.text }}>Category</Text>
+                                            <TouchableOpacity
+                                                onPress={() => setCategoryPickerVisible(true)}
+                                                className="rounded-2xl px-4 py-4 flex-row items-center justify-between"
+                                                style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }}
+                                            >
+                                                <Text style={{ color: editingService?.category ? colors.text : colors.textSecondary, fontWeight: '600' }}>
+                                                    {editingService?.category || 'Select a category'}
+                                                </Text>
+                                                <ChevronDown size={20} color={colors.textSecondary} />
+                                            </TouchableOpacity>
+                                        </View>
 
-                                <View className="mt-4">
-                                    <Text className="text-sm font-bold text-accent-dark mb-2 uppercase tracking-widest text-[10px]">Category</Text>
-                                    <TextInput
-                                        value={editingService?.category}
-                                        onChangeText={(t) => setEditingService({ ...editingService, category: t })}
-                                        className="bg-gray-50 border border-gray-100 rounded-2xl px-4 py-4 text-black font-semibold"
-                                        placeholder="e.g. Catering, Venue"
-                                    />
-                                </View>
+                                        {/* Catalog Service Dropdown */}
+                                        {editingService?.category ? (
+                                            <View className="mt-4">
+                                                <Text className="text-sm font-bold mb-2 uppercase tracking-widest text-[10px]" style={{ color: colors.text }}>Catalog Service</Text>
+                                                <TouchableOpacity
+                                                    onPress={() => setCatalogServicePickerVisible(true)}
+                                                    className="rounded-2xl px-4 py-4 flex-row items-center justify-between"
+                                                    style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }}
+                                                >
+                                                    <Text style={{ color: editingService?.name ? colors.text : colors.textSecondary, fontWeight: '600' }}>
+                                                        {editingService?.name || 'Select a catalog service'}
+                                                    </Text>
+                                                    <ChevronDown size={20} color={colors.textSecondary} />
+                                                </TouchableOpacity>
+                                            </View>
+                                        ) : null}
 
-                                <View className="mt-4">
-                                    <Text className="text-sm font-bold text-accent-dark mb-2 uppercase tracking-widest text-[10px]">Price (₹)</Text>
-                                    <TextInput
-                                        value={editingService?.price_amount?.toString()}
-                                        onChangeText={(t) => setEditingService({ ...editingService, price_amount: t })}
-                                        keyboardType="numeric"
-                                        className="bg-gray-50 border border-gray-100 rounded-2xl px-4 py-4 text-black font-semibold"
-                                        placeholder="Enter price"
-                                    />
-                                </View>
+                                        {/* Pricing Type Dropdown */}
+                                        {editingService?.name && selectedCatalogService ? (
+                                            <View className="mt-4">
+                                                <Text className="text-sm font-bold mb-2 uppercase tracking-widest text-[10px]" style={{ color: colors.text }}>Pricing Tier</Text>
+                                                <TouchableOpacity
+                                                    onPress={() => setPricingTypePickerVisible(true)}
+                                                    className="rounded-2xl px-4 py-4 flex-row items-center justify-between"
+                                                    style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }}
+                                                >
+                                                    <Text style={{ color: editingService?.pricing_type ? colors.text : colors.textSecondary, fontWeight: '600' }}>
+                                                        {editingService?.pricing_type
+                                                            ? `${getPricingTierLabel(editingService.pricing_type)} - ₹${editingService.price_amount}`
+                                                            : 'Select pricing tier'}
+                                                    </Text>
+                                                    <ChevronDown size={20} color={colors.textSecondary} />
+                                                </TouchableOpacity>
+                                            </View>
+                                        ) : null}
 
-                                <View className="mt-4 flex-row items-center justify-between bg-surface p-4 rounded-2xl">
+                                        {/* Price Summary Card */}
+                                        {editingService?.price_amount && editingService?.pricing_type ? (
+                                            <View className="mt-4 p-5 rounded-2xl" style={{ backgroundColor: colors.primary + '12', borderWidth: 1, borderColor: colors.primary + '30' }}>
+                                                <Text className="text-[10px] font-bold uppercase tracking-widest" style={{ color: colors.primary }}>Selected Service</Text>
+                                                <Text className="text-2xl font-bold mt-2" style={{ color: colors.primary }}>₹{editingService.price_amount}</Text>
+                                                <Text className="text-xs mt-2 leading-5" style={{ color: colors.textSecondary }}>
+                                                    {editingService.category} → {editingService.name}
+                                                </Text>
+                                                <Text className="text-xs font-semibold" style={{ color: colors.textSecondary }}>
+                                                    Tier: {getPricingTierLabel(editingService.pricing_type)}
+                                                </Text>
+                                            </View>
+                                        ) : null}
+                                    </>
+                                ) : (
+                                    <>
+                                        <View>
+                                            <Text className="text-sm font-bold mb-2 uppercase tracking-widest text-[10px]" style={{ color: colors.text }}>Service Name</Text>
+                                            <TextInput
+                                                value={editingService?.name}
+                                                onChangeText={(t) => setEditingService({ ...editingService, name: t })}
+                                                className="rounded-2xl px-4 py-4 font-semibold"
+                                                style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, color: colors.text }}
+                                                placeholder="Enter service name"
+                                                placeholderTextColor={colors.textSecondary}
+                                            />
+                                        </View>
+
+                                        <View className="mt-4">
+                                            <Text className="text-sm font-bold mb-2 uppercase tracking-widest text-[10px]" style={{ color: colors.text }}>Category</Text>
+                                            <TouchableOpacity
+                                                onPress={() => setCategoryPickerVisible(true)}
+                                                className="rounded-2xl px-4 py-4 font-semibold flex-row items-center justify-between"
+                                                style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }}
+                                            >
+                                                <Text style={{ color: editingService?.category ? colors.text : colors.textSecondary }}>
+                                                    {editingService?.category || 'Select a category'}
+                                                </Text>
+                                                <ChevronDown size={20} color={colors.textSecondary} />
+                                            </TouchableOpacity>
+                                        </View>
+
+                                        <View className="mt-4">
+                                            <Text className="text-sm font-bold mb-2 uppercase tracking-widest text-[10px]" style={{ color: colors.text }}>Price (₹)</Text>
+                                            <TextInput
+                                                value={editingService?.price_amount?.toString()}
+                                                onChangeText={(t) => setEditingService({ ...editingService, price_amount: t })}
+                                                keyboardType="numeric"
+                                                className="rounded-2xl px-4 py-4 font-semibold"
+                                                style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, color: colors.text }}
+                                                placeholder="Enter price"
+                                                placeholderTextColor={colors.textSecondary}
+                                            />
+                                        </View>
+                                    </>
+                                )}
+
+                                <View className="mt-4 flex-row items-center justify-between p-4 rounded-2xl" style={{ backgroundColor: colors.background }}>
                                     <View>
-                                        <Text className="text-accent-dark font-bold">Active Status</Text>
-                                        <Text className="text-accent text-[10px]">Show this service to clients</Text>
+                                        <Text className="font-bold" style={{ color: colors.text }}>Active Status</Text>
+                                        <Text className="text-[10px]" style={{ color: colors.textSecondary }}>Show this service to clients</Text>
                                     </View>
                                     <TouchableOpacity
                                         onPress={() => setEditingService({ ...editingService, is_active: !editingService.is_active })}
-                                        className={`w-14 h-8 rounded-full items-center justify-center ${editingService?.is_active ? 'bg-primary' : 'bg-gray-300'}`}
+                                        className={`w-14 h-8 rounded-full items-center justify-center ${editingService?.is_active ? 'bg-primary' : ''}`}
+                                        style={{ backgroundColor: editingService?.is_active ? colors.primary : colors.border }}
                                     >
-                                        <View className={`w-6 h-6 bg-white rounded-full absolute ${editingService?.is_active ? 'right-1' : 'left-1'}`} />
+                                        <View className={`w-6 h-6 rounded-full absolute ${editingService?.is_active ? 'right-1' : 'left-1'}`} style={{ backgroundColor: colors.surface }} />
                                     </TouchableOpacity>
                                 </View>
                             </View>
@@ -577,6 +758,226 @@ export default function ServicesScreen() {
                         </ScrollView>
                     </View>
                 </View>
+                </KeyboardAvoidingView>
+            </Modal>
+
+            {/* Category Picker Modal - Matching onboarding style */}
+            <Modal
+                visible={categoryPickerVisible}
+                transparent={true}
+                animationType="slide"
+                onRequestClose={() => setCategoryPickerVisible(false)}
+            >
+                <View className="flex-1 justify-end bg-black/50">
+                    <View 
+                        className="rounded-t-3xl p-6" 
+                        style={{ 
+                            backgroundColor: colors.surface,
+                            height: '60%'
+                        }}
+                    >
+                        <View className="flex-row justify-between items-center mb-6">
+                            <Text className="text-xl font-bold" style={{ color: colors.text }}>Select Category</Text>
+                            <TouchableOpacity onPress={() => setCategoryPickerVisible(false)}>
+                                <X size={24} color={colors.textSecondary} />
+                            </TouchableOpacity>
+                        </View>
+                        {categories.length === 0 ? (
+                            <View className="flex-1 items-center justify-center py-20">
+                                <ActivityIndicator size="large" color="#FF6B00" />
+                                <Text className="mt-4 font-bold" style={{ color: colors.textSecondary }}>Loading categories...</Text>
+                            </View>
+                        ) : (
+                            <FlatList
+                                data={categories}
+                                keyExtractor={(item) => item.id}
+                                renderItem={({ item }) => (
+                                    <TouchableOpacity
+                                        onPress={() => {
+                                            if (isNew) {
+                                                setEditingService({ ...editingService, category: item.name, category_id: item.id, name: '', price_amount: '', pricing_type: '', offerable_service_id: '' });
+                                                setSelectedCatalogService(null);
+                                                setCatalogServices([]);
+                                                fetchCatalogServices(item.id);
+                                            } else {
+                                                setEditingService({ ...editingService, category: item.name });
+                                            }
+                                            setCategoryPickerVisible(false);
+                                        }}
+                                        className="py-4 px-4 rounded-xl mb-2 flex-row items-center justify-between"
+                                        style={{
+                                            backgroundColor: editingService?.category === item.name 
+                                                ? colors.primary + '1A' 
+                                                : colors.background,
+                                            borderWidth: editingService?.category === item.name ? 1 : 0,
+                                            borderColor: editingService?.category === item.name 
+                                                ? colors.primary + '33' 
+                                                : 'transparent'
+                                        }}
+                                    >
+                                        <Text 
+                                            className="text-base font-bold" 
+                                            style={{ 
+                                                color: editingService?.category === item.name 
+                                                    ? colors.primary 
+                                                    : colors.text 
+                                            }}
+                                        >
+                                            {item.name}
+                                        </Text>
+                                        {editingService?.category === item.name && (
+                                            <Check size={20} color="#FF6B00" />
+                                        )}
+                                    </TouchableOpacity>
+                                )}
+                                showsVerticalScrollIndicator={false}
+                            />
+                        )}
+                    </View>
+                </View>
+            </Modal>
+
+            {/* Catalog Service Picker Modal */}
+            <Modal
+                visible={catalogServicePickerVisible}
+                transparent={true}
+                animationType="slide"
+                onRequestClose={() => setCatalogServicePickerVisible(false)}
+            >
+                <View className="flex-1 justify-end bg-black/50">
+                    <View 
+                        className="rounded-t-3xl p-6" 
+                        style={{ backgroundColor: colors.surface, height: '70%' }}
+                    >
+                        <View className="flex-row justify-between items-center mb-6">
+                            <Text className="text-xl font-bold" style={{ color: colors.text }}>Select Catalog Service</Text>
+                            <TouchableOpacity onPress={() => setCatalogServicePickerVisible(false)}>
+                                <X size={24} color={colors.textSecondary} />
+                            </TouchableOpacity>
+                        </View>
+                        {catalogServices.length === 0 ? (
+                            <View className="flex-1 items-center justify-center py-20">
+                                <ActivityIndicator size="large" color="#FF6B00" />
+                                <Text className="mt-4 font-bold" style={{ color: colors.textSecondary }}>Loading catalog services...</Text>
+                            </View>
+                        ) : (
+                            <FlatList
+                                data={catalogServices}
+                                keyExtractor={(item) => item.id}
+                                renderItem={({ item }) => (
+                                    <TouchableOpacity
+                                        onPress={() => {
+                                            setEditingService({ ...editingService, name: item.name, offerable_service_id: item.id, price_amount: '', pricing_type: '' });
+                                            setSelectedCatalogService(item);
+                                            setCatalogServicePickerVisible(false);
+                                        }}
+                                        className="py-4 px-4 rounded-xl mb-3"
+                                        style={{
+                                            backgroundColor: editingService?.name === item.name 
+                                                ? colors.primary + '1A' 
+                                                : colors.background,
+                                            borderWidth: 1,
+                                            borderColor: editingService?.name === item.name 
+                                                ? colors.primary + '33' 
+                                                : colors.border
+                                        }}
+                                    >
+                                        <Text 
+                                            className="text-base font-bold" 
+                                            style={{ color: editingService?.name === item.name ? colors.primary : colors.text }}
+                                        >
+                                            {item.name}
+                                        </Text>
+                                        <View className="flex-row flex-wrap mt-2 gap-x-3 gap-y-1">
+                                            {item.price_basic != null && <Text className="text-xs" style={{ color: colors.textSecondary }}>Basic: ₹{item.price_basic}</Text>}
+                                            <Text className="text-xs" style={{ color: colors.textSecondary }}>Classic Value: ₹{item.price_classic_value ?? 0}</Text>
+                                            <Text className="text-xs" style={{ color: colors.textSecondary }}>Signature: ₹{item.price_signature ?? 0}</Text>
+                                            <Text className="text-xs" style={{ color: colors.textSecondary }}>Prestige: ₹{item.price_prestige ?? 0}</Text>
+                                            <Text className="text-xs" style={{ color: colors.textSecondary }}>Royal: ₹{item.price_royal ?? 0}</Text>
+                                            <Text className="text-xs" style={{ color: colors.textSecondary }}>Imperial: ₹{item.price_imperial ?? 0}</Text>
+                                        </View>
+                                    </TouchableOpacity>
+                                )}
+                                showsVerticalScrollIndicator={false}
+                            />
+                        )}
+                    </View>
+                </View>
+            </Modal>
+
+            {/* Pricing Type Picker Modal */}
+            <Modal
+                visible={pricingTypePickerVisible}
+                transparent={true}
+                animationType="slide"
+                onRequestClose={() => setPricingTypePickerVisible(false)}
+            >
+                <View className="flex-1 justify-end bg-black/50">
+                    <View 
+                        className="rounded-t-3xl p-6" 
+                        style={{ backgroundColor: colors.surface }}
+                    >
+                        <View className="flex-row justify-between items-center mb-6">
+                            <Text className="text-xl font-bold" style={{ color: colors.text }}>Select Pricing Tier</Text>
+                            <TouchableOpacity onPress={() => setPricingTypePickerVisible(false)}>
+                                <X size={24} color={colors.textSecondary} />
+                            </TouchableOpacity>
+                        </View>
+                                {selectedCatalogService && (
+                                    <View>
+                                        {[
+                                            ...(selectedCatalogService.price_basic != null ? [{ key: 'basic', label: 'Basic', price: selectedCatalogService.price_basic ?? 0, desc: 'Entry level' }] : []),
+                                            { key: 'classic_value', label: 'Classic Value', price: selectedCatalogService.price_classic_value ?? 0, desc: 'Economy option' },
+                                            { key: 'signature', label: 'Signature', price: selectedCatalogService.price_signature ?? 0, desc: 'Popular choice' },
+                                            { key: 'prestige', label: 'Prestige', price: selectedCatalogService.price_prestige ?? 0, desc: 'Premium quality' },
+                                            { key: 'royal', label: 'Royal', price: selectedCatalogService.price_royal ?? 0, desc: 'Luxury tier' },
+                                            { key: 'imperial', label: 'Imperial', price: selectedCatalogService.price_imperial ?? 0, desc: 'Top tier' },
+                                        ].filter(t => t.price > 0).map((tier) => (
+                                    <TouchableOpacity
+                                        key={tier.key}
+                                        onPress={() => {
+                                            setEditingService({ ...editingService, pricing_type: tier.key, price_amount: tier.price.toString() });
+                                            setPricingTypePickerVisible(false);
+                                        }}
+                                        className="py-5 px-5 rounded-xl mb-3 flex-row items-center justify-between"
+                                        style={{
+                                            backgroundColor: editingService?.pricing_type === tier.key 
+                                                ? colors.primary + '1A' 
+                                                : colors.background,
+                                            borderWidth: 1,
+                                            borderColor: editingService?.pricing_type === tier.key 
+                                                ? colors.primary + '33' 
+                                                : colors.border
+                                        }}
+                                    >
+                                        <View>
+                                            <Text 
+                                                className="text-base font-bold" 
+                                                style={{ color: editingService?.pricing_type === tier.key ? colors.primary : colors.text }}
+                                            >
+                                                {tier.label}
+                                            </Text>
+                                            <Text className="text-xs mt-1" style={{ color: colors.textSecondary }}>
+                                                {tier.desc}
+                                            </Text>
+                                        </View>
+                                        <View className="flex-row items-center">
+                                            <Text 
+                                                className="text-lg font-bold mr-3" 
+                                                style={{ color: editingService?.pricing_type === tier.key ? colors.primary : colors.text }}
+                                            >
+                                                ₹{tier.price}
+                                            </Text>
+                                            {editingService?.pricing_type === tier.key && (
+                                                <Check size={20} color="#FF6B00" />
+                                            )}
+                                        </View>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+                        )}
+                    </View>
+                </View>
             </Modal>
 
             {/* Preview Modal */}
@@ -587,9 +988,9 @@ export default function ServicesScreen() {
                 onRequestClose={() => setPreviewModalVisible(false)}
             >
                 <View className="flex-1 justify-center items-center bg-black/70 px-6">
-                    <View className="bg-white w-full rounded-[40px] overflow-hidden shadow-2xl">
+                    <View className="w-full rounded-[40px] overflow-hidden shadow-2xl" style={{ backgroundColor: colors.surface }}>
                         <View className="relative">
-                            <View className="w-full h-64 bg-gray-100">
+                            <View className="w-full h-64" style={{ backgroundColor: colors.background }}>
                                 {previewServiceData?.image_urls?.[0] ? (
                                     <ServiceImage imageUrl={previewServiceData.image_urls[0]} />
                                 ) : (
@@ -609,7 +1010,7 @@ export default function ServicesScreen() {
                         </View>
                         <View className="p-8">
                             <View className="flex-row justify-between items-center mb-4">
-                                <Text className="text-accent-dark font-extrabold text-2xl">{previewServiceData?.name}</Text>
+                                <Text className="font-extrabold text-2xl" style={{ color: colors.text }}>{previewServiceData?.name}</Text>
                                 <Text className="text-primary font-bold text-2xl">₹{previewServiceData?.price_amount}</Text>
                             </View>
                             <View className="flex-row items-center mb-6">
@@ -618,10 +1019,10 @@ export default function ServicesScreen() {
                                 </View>
                                 <View className="flex-row items-center">
                                     <Star size={14} color="#FF6B00" fill="#FF6B00" />
-                                    <Text className="text-accent-dark text-sm font-bold ml-1">4.8 (120 reviews)</Text>
+                                    <Text className="text-sm font-bold ml-1" style={{ color: colors.text }}>4.8 (120 reviews)</Text>
                                 </View>
                             </View>
-                            <Text className="text-accent text-sm leading-6 mb-8">
+                            <Text className="text-sm leading-6 mb-8" style={{ color: colors.textSecondary }}>
                                 High-quality {previewServiceData?.category?.toLowerCase() || 'service'} provided by Ekatraa verified partners.
                                 Book now to ensure availability for your special event.
                             </Text>
