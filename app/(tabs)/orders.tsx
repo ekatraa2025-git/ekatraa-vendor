@@ -84,13 +84,18 @@ export default function OrdersScreen() {
     const fetchOrders = async () => {
         try {
             setLoading(true);
-            const { data, error } = await fetchVendorOrders(filter === 'all' ? undefined : filter);
+            const apiFilter = filter === 'all' ? undefined : filter === 'active' ? undefined : filter;
+            const { data, error } = await fetchVendorOrders(apiFilter);
             if (error) {
                 console.warn('[Orders] Fetch error:', error);
                 Alert.alert('Error', error);
                 setOrders([]);
             } else {
-                setOrders(data || []);
+                let list = data || [];
+                if (filter === 'active') {
+                    list = list.filter((o: any) => ['allocated', 'pending', 'confirmed'].includes(o.status || ''));
+                }
+                setOrders(list);
             }
         } catch (error: any) {
             console.error('Error fetching orders:', error);
@@ -452,26 +457,20 @@ Thank you for choosing Ekatraa!
                 <Text className="text-xs" style={{ color: colors.textSecondary }}>Orders allocated to you — submit quotations</Text>
             </View>
 
-            <View className="px-6 mb-6">
-                <FlatList
-                    horizontal
-                    data={['all', 'allocated', 'pending', 'confirmed', 'completed']}
-                    keyExtractor={(f) => f}
-                    renderItem={({ item: f }) => (
-                        <TouchableOpacity
-                            key={f}
-                            onPress={() => setFilter(f)}
-                            className="px-6 py-2.5 rounded-full mr-3 border"
-                            style={{
-                                backgroundColor: filter === f ? colors.text : colors.surface,
-                                borderColor: filter === f ? colors.text : colors.border,
-                            }}
-                        >
-                            <Text className="font-bold text-xs capitalize" style={{ color: filter === f ? colors.background : colors.text }}>{f}</Text>
-                        </TouchableOpacity>
-                    )}
-                    showsHorizontalScrollIndicator={false}
-                />
+            <View className="px-6 mb-6 flex-row gap-3">
+                {(['all', 'active', 'completed'] as const).map((f) => (
+                    <TouchableOpacity
+                        key={f}
+                        onPress={() => setFilter(f)}
+                        className="flex-1 py-3 rounded-2xl border items-center justify-center"
+                        style={{
+                            backgroundColor: filter === f ? colors.text : colors.surface,
+                            borderColor: filter === f ? colors.text : colors.border,
+                        }}
+                    >
+                        <Text className="font-bold text-sm capitalize" style={{ color: filter === f ? colors.background : colors.text }}>{f}</Text>
+                    </TouchableOpacity>
+                ))}
             </View>
 
             <FlatList
@@ -485,7 +484,7 @@ Thank you for choosing Ekatraa!
                 }
                 ListEmptyComponent={() => (
                     <View className="flex-1 items-center justify-center py-20">
-                        <Text className="font-medium" style={{ color: colors.textSecondary }}>No {filter} orders</Text>
+                        <Text className="font-medium" style={{ color: colors.textSecondary }}>No {filter === 'active' ? 'active' : filter} orders</Text>
                         <Text className="text-xs mt-2 text-center px-8" style={{ color: colors.textSecondary }}>Orders will appear here when admin allocates them to you</Text>
                     </View>
                 )}

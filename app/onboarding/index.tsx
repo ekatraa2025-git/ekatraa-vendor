@@ -110,98 +110,29 @@ export default function OnboardingScreen() {
     const fetchCategories = async () => {
         try {
             setLoadingCategories(true);
-            console.log('[CATEGORIES] Starting fetch...');
+            const apiUrl = process.env.EXPO_PUBLIC_API_URL ||
+                (Constants.expoConfig?.extra?.EXPO_PUBLIC_API_URL) ||
+                (Constants.expoConfig?.extra?.API_URL);
 
-            // Try selecting all columns first to debug
-            const { data: allData, error: allError } = await supabase
-                .from('vendor_categories')
-                .select('*')
-                .order('name', { ascending: true });
-
-            console.log('[CATEGORIES] Query result:', {
-                hasData: !!allData,
-                dataLength: allData?.length,
-                error: allError ? {
-                    code: allError.code,
-                    message: allError.message,
-                    details: allError.details,
-                    hint: allError.hint
-                } : null,
-                firstItem: allData?.[0]
-            });
-
-            if (allError) {
-                console.error('[CATEGORIES] Query error:', allError);
-
-                // If permission error, try API endpoint
-                if (allError.code === 'PGRST116' || allError.code === '42501' ||
-                    allError.message?.includes('permission') ||
-                    allError.message?.includes('policy') ||
-                    allError.message?.includes('row-level security')) {
-                    console.warn('[CATEGORIES] Permission denied, trying API endpoint');
-
-                    const apiUrl = process.env.EXPO_PUBLIC_API_URL ||
-                        (Constants.expoConfig?.extra?.EXPO_PUBLIC_API_URL) ||
-                        (Constants.expoConfig?.extra?.API_URL);
-
-                    console.log('[CATEGORIES] API URL:', apiUrl);
-
-                    if (apiUrl) {
-                        try {
-                            const response = await fetch(`${apiUrl}/api/categories`);
-                            console.log('[CATEGORIES] API response status:', response.status);
-
-                            if (response.ok) {
-                                const apiData = await response.json();
-                                console.log('[CATEGORIES] API data received:', apiData?.length, apiData);
-
-                                if (apiData && Array.isArray(apiData) && apiData.length > 0) {
-                                    // Map API data to expected format
-                                    const mappedData = apiData.map((item: any) => ({
-                                        id: item.id || item.category_id || String(item.name),
-                                        name: item.name || item.category_name || String(item.id)
-                                    }));
-
-                                    console.log('[CATEGORIES] Mapped API data:', mappedData);
-                                    setCategories(mappedData);
-                                    return;
-                                }
-                            } else {
-                                const errorText = await response.text();
-                                console.error('[CATEGORIES] API error response:', errorText);
-                            }
-                        } catch (apiError: any) {
-                            console.error('[CATEGORIES] API fetch exception:', apiError);
-                        }
-                    } else {
-                        console.warn('[CATEGORIES] No API URL configured');
-                    }
-                }
+            if (!apiUrl) {
+                console.warn('[CATEGORIES] No API URL configured');
                 return;
             }
 
-            // Process the data if we got it
-            if (allData && Array.isArray(allData) && allData.length > 0) {
-                // Map the data to ensure we have id and name
-                const mappedData = allData.map((item: any) => {
-                    // Try different possible column names
-                    const id = item.id || item.category_id || item.uuid || String(item.name || '');
-                    const name = item.name || item.category_name || item.title || item.label || String(item.id || '');
-
-                    return { id, name };
-                }).filter((item: any) => item.id && item.name);
-
-                if (mappedData.length > 0) {
-                    console.log('[CATEGORIES] Successfully loaded:', mappedData.length, 'categories');
-                    console.log('[CATEGORIES] Sample:', mappedData.slice(0, 3));
+            const response = await fetch(`${apiUrl}/api/public/categories`);
+            if (response.ok) {
+                const apiData = await response.json();
+                if (apiData && Array.isArray(apiData) && apiData.length > 0) {
+                    const mappedData = apiData.map((item: any) => ({
+                        id: item.id || String(item.name),
+                        name: item.name || String(item.id),
+                    }));
                     setCategories(mappedData);
                     return;
-                } else {
-                    console.warn('[CATEGORIES] Data found but could not map to id/name format');
-                    console.warn('[CATEGORIES] Raw data sample:', allData[0]);
                 }
             } else {
-                console.warn('[CATEGORIES] No categories found - table exists but is empty or query returned no rows');
+                const errorText = await response.text();
+                console.warn('[CATEGORIES] Public categories request failed:', response.status, errorText);
             }
         } catch (error: any) {
             console.error('[CATEGORIES] Exception:', error);
