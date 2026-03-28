@@ -10,6 +10,7 @@ import { supabase } from "../lib/supabase";
 import { loadTranslationsFromBackend, refreshTranslations } from "../lib/i18n";
 
 import "../global.css";
+import TermsAcceptanceGate from "../components/TermsAcceptanceGate";
 
 interface Props {
     children: ReactNode;
@@ -167,7 +168,9 @@ export default function RootLayout() {
     return (
         <ErrorBoundary>
             <ThemeProvider>
-                <AppContent />
+                <TermsAcceptanceGate>
+                    <AppContent />
+                </TermsAcceptanceGate>
             </ThemeProvider>
         </ErrorBoundary>
     );
