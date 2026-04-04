@@ -3,6 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, FlatList, 
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Calendar, Clock, MapPin, Check, X, ChevronRight, Edit3, MessageSquare, ReceiptText, UploadCloud } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
+import { resolveStorageImageUrl } from '../../lib/storageImageUrl';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../../context/ThemeContext';
 import { formatReceiptData } from '../../lib/receipt';
@@ -216,70 +217,7 @@ Thank you for choosing Ekatraa!
         }
     };
 
-    // Helper function to get signed URL from file path or existing URL
-    const getImageUrl = async (urlOrPath: string | null | undefined): Promise<string> => {
-        if (!urlOrPath) return '';
-
-        try {
-            let fileName = urlOrPath;
-
-            // If it's already a full URL, extract the filename
-            if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
-                // Extract filename from Supabase storage URL
-                // Format: https://...supabase.co/storage/v1/object/public/ekatraa2025/filename.jpg
-                const urlMatch = urlOrPath.match(/\/ekatraa2025\/([^/?]+)/);
-                if (urlMatch && urlMatch[1]) {
-                    fileName = urlMatch[1];
-                } else {
-                    // If it's already a signed URL with token, return as-is
-                    if (urlOrPath.includes('token=')) {
-                        return urlOrPath;
-                    }
-                    // Otherwise try to extract filename from end of URL
-                    fileName = urlOrPath.split('/').pop()?.split('?')[0] || urlOrPath;
-                }
-            } else if (urlOrPath.includes('/')) {
-                // Extract filename from path
-                fileName = urlOrPath.split('/').pop() || urlOrPath;
-            }
-
-            // Generate signed URL (valid for 24 hours for better caching)
-            try {
-                const { data, error } = await supabase.storage
-                    .from('ekatraa2025')
-                    .createSignedUrl(fileName, 86400); // 24 hours expiry for faster loading
-
-                if (error) {
-                    console.error('[SIGNED URL ERROR]', error, 'fileName:', fileName);
-                    // Fallback to public URL
-                    const { data: { publicUrl } } = supabase.storage
-                        .from('ekatraa2025')
-                        .getPublicUrl(fileName);
-                    return publicUrl;
-                }
-
-                if (data && data.signedUrl) {
-                    return data.signedUrl;
-                }
-
-                // Final fallback if signedUrl is somehow missing
-                const { data: { publicUrl } } = supabase.storage
-                    .from('ekatraa2025')
-                    .getPublicUrl(fileName);
-                return publicUrl;
-            } catch (storageError: any) {
-                console.error('[STORAGE API ERROR]', storageError);
-                // Fallback to public URL
-                const { data: { publicUrl } } = supabase.storage
-                    .from('ekatraa2025')
-                    .getPublicUrl(fileName);
-                return publicUrl;
-            }
-        } catch (error) {
-            console.error('[GET IMAGE URL ERROR]', error);
-            return urlOrPath as string; // Return original if all fails
-        }
-    };
+    const getImageUrl = (urlOrPath: string | null | undefined) => resolveStorageImageUrl(urlOrPath, 86400);
 
     // Helper to convert base64 to ArrayBuffer
     const base64ToArrayBuffer = (base64: string): ArrayBuffer => {

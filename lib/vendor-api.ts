@@ -190,6 +190,40 @@ export async function confirmOrderCompletion(orderId: string, otp: string): Prom
     }
 }
 
+export async function requestOrderStart(orderId: string): Promise<{ data: any | null; error: string | null }> {
+    const url = buildApiUrl(`/api/vendor/orders/${orderId}/request-start`);
+    if (!url) return { data: null, error: 'API URL not configured' };
+
+    try {
+        const headers = await getAuthHeaders();
+        const res = await fetch(url, { method: 'POST', headers });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) return { data: null, error: data?.error || res.statusText };
+        return { data, error: null };
+    } catch (e: any) {
+        return { data: null, error: e?.message || 'Network error' };
+    }
+}
+
+export async function confirmOrderStart(orderId: string, otp: string): Promise<{ data: any | null; error: string | null }> {
+    const url = buildApiUrl(`/api/vendor/orders/${orderId}/confirm-start`);
+    if (!url) return { data: null, error: 'API URL not configured' };
+
+    try {
+        const headers = await getAuthHeaders();
+        const res = await fetch(url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ otp }),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) return { data: null, error: data?.error || res.statusText };
+        return { data, error: null };
+    } catch (e: any) {
+        return { data: null, error: e?.message || 'Network error' };
+    }
+}
+
 export async function submitVendorQuotation(payload: SubmitQuotationPayload): Promise<{ data: any | null; error: string | null }> {
     const url = buildApiUrl('/api/vendor/quotations');
     if (!url) return { data: null, error: 'API URL not configured' };

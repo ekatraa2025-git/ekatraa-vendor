@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Alert, ActivityIndicator } from 'react-native';
+import VendorTermsModal from '../../components/VendorTermsModal';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Phone, ArrowRight } from 'lucide-react-native';
@@ -10,6 +11,7 @@ import { useTheme } from '../../context/ThemeContext';
 export default function LoginScreen() {
     const [phone, setPhone] = useState('');
     const [loading, setLoading] = useState(false);
+    const [vendorTermsVisible, setVendorTermsVisible] = useState(false);
     const router = useRouter();
     const { colors } = useTheme();
 
@@ -110,23 +112,25 @@ export default function LoginScreen() {
                             </TouchableOpacity>
                         </View>
 
-                        <View className="mt-12 items-center">
-                            <Text className="text-sm" style={{ color: colors.textSecondary }}>
+                        <View className="mt-12 items-center px-2">
+                            <Text className="text-sm text-center" style={{ color: colors.textSecondary }}>
                                 By continuing, you agree to our
                             </Text>
-                            <View className="flex-row mt-1">
-                                <TouchableOpacity>
-                                    <Text className="text-primary font-semibold text-sm">Terms of Service</Text>
-                                </TouchableOpacity>
-                                <Text className="text-sm mx-1" style={{ color: colors.textSecondary }}>&</Text>
-                                <TouchableOpacity>
-                                    <Text className="text-primary font-semibold text-sm">Privacy Policy</Text>
-                                </TouchableOpacity>
-                            </View>
+                            <TouchableOpacity
+                                className="mt-2"
+                                onPress={() => setVendorTermsVisible(true)}
+                                activeOpacity={0.7}
+                            >
+                                <Text className="text-primary font-semibold text-sm">Vendor Terms & Conditions</Text>
+                            </TouchableOpacity>
+                            <Text className="text-xs mt-1 text-center" style={{ color: colors.textSecondary }}>
+                                (same as at app start)
+                            </Text>
                         </View>
                     </View>
                 </ScrollView>
             </KeyboardAvoidingView>
+            <VendorTermsModal visible={vendorTermsVisible} onClose={() => setVendorTermsVisible(false)} />
         </SafeAreaView>
     );
 }

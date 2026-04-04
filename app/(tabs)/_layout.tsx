@@ -116,6 +116,12 @@ export default function TabLayout() {
                 }}
             />
             <Tabs.Screen
+                name="bookings"
+                options={{
+                    href: null,
+                }}
+            />
+            <Tabs.Screen
                 name="profile"
                 options={{
                     title: 'Profile',

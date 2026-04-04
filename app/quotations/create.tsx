@@ -213,9 +213,18 @@ export default function CreateQuotation() {
             : (selectedService?.name || '');
         
         if (!serviceName || !formData.amount) {
-            Alert.alert('Missing Info', editing 
-                ? 'Please enter an amount.' 
+            Alert.alert('Missing Info', editing
+                ? 'Please enter an amount.'
                 : 'Please select a service and enter an amount.');
+            return;
+        }
+        const parsedAmount = parseFloat(formData.amount);
+        if (isNaN(parsedAmount) || parsedAmount <= 0) {
+            Alert.alert('Invalid Amount', 'Please enter a valid positive amount.');
+            return;
+        }
+        if (parsedAmount > 9999999) {
+            Alert.alert('Invalid Amount', 'Amount cannot exceed ₹99,99,999.');
             return;
         }
 
@@ -450,6 +459,7 @@ export default function CreateQuotation() {
                                     onChangeText={(text) => setFormData({ ...formData, amount: text })}
                                     className="flex-1 font-extrabold text-xl"
                                     style={{ color: colors.text }}
+                                    maxLength={8}
                                 />
                             </View>
                             {selectedService && (

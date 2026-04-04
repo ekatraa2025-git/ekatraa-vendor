@@ -67,24 +67,27 @@ function SplashScreen() {
         const maxTimeout = setTimeout(() => {
             console.warn('Session check timeout, navigating to login');
             router.replace('/(auth)/login');
-        }, 3000); // Reduced timeout
+        }, 3000);
 
         try {
             if (supabase && supabase.auth) {
                 const sessionPromise = supabase.auth.getSession();
-                const timeoutPromise = new Promise((_, reject) => 
-                    setTimeout(() => reject(new Error('Session check timeout')), 2000) // Reduced timeout
+                const timeoutPromise = new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('Session check timeout')), 2000)
                 );
-                
+
                 const result = await Promise.race([
                     sessionPromise,
                     timeoutPromise
                 ]) as any;
-                
+
                 clearTimeout(maxTimeout);
-                
-                // Navigate immediately without delay
-                if (result?.data?.session && !result?.error) {
+
+                // If there's an auth error (e.g. invalid refresh token), clear the stale session
+                if (result?.error) {
+                    await supabase.auth.signOut().catch(() => {});
+                    router.replace('/(auth)/login');
+                } else if (result?.data?.session) {
                     router.replace('/(tabs)/dashboard');
                 } else {
                     router.replace('/(auth)/login');
@@ -95,7 +98,8 @@ function SplashScreen() {
             }
         } catch (error) {
             clearTimeout(maxTimeout);
-            console.warn('Session check error:', error);
+            // Sign out to clear any stale token that may have caused the error
+            await supabase.auth.signOut().catch(() => {});
             router.replace('/(auth)/login');
         }
     };

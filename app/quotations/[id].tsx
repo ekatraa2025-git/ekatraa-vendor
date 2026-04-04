@@ -5,6 +5,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ChevronLeft, Calendar, FileText, Download, Share2, CheckCircle2, XCircle, Clock, MapPin, ReceiptText } from 'lucide-react-native';
 import { readAsStringAsync } from 'expo-file-system/legacy';
 import { supabase } from '../../lib/supabase';
+import { resolveStorageImageUrl } from '../../lib/storageImageUrl';
 import { useTheme } from '../../context/ThemeContext';
 import BottomNav from '../../components/BottomNav';
 
@@ -21,48 +22,17 @@ export default function QuotationDetail() {
         fetchQuotation();
     }, [id]);
 
-    // Helper function to get signed URL from file path or existing URL
     const getImageUrl = async (urlOrPath: string | null | undefined): Promise<string> => {
         if (!urlOrPath) return '';
-        
-        try {
-            // If it's already a full URL (signed or public), return as-is
-            if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
-                return urlOrPath;
-            }
-
-            // Check cache first
-            if (imageUrlCache[urlOrPath]) {
-                return imageUrlCache[urlOrPath];
-            }
-
-            // Extract filename from path (handle both full paths and just filenames)
-            let fileName = urlOrPath;
-            if (urlOrPath.includes('/')) {
-                fileName = urlOrPath.split('/').pop() || urlOrPath;
-            }
-            
-            // Generate signed URL (valid for 24 hours for better caching)
-            const { data, error } = await supabase.storage
-                .from('ekatraa2025')
-                .createSignedUrl(fileName, 86400); // 24 hours expiry for faster loading
-
-            if (error) {
-                console.error('[SIGNED URL ERROR]', error);
-                // Fallback to public URL
-                const { data: { publicUrl } } = supabase.storage
-                    .from('ekatraa2025')
-                    .getPublicUrl(fileName);
-                setImageUrlCache(prev => ({ ...prev, [urlOrPath]: publicUrl }));
-                return publicUrl;
-            }
-
-            setImageUrlCache(prev => ({ ...prev, [urlOrPath]: data.signedUrl }));
-            return data.signedUrl;
-        } catch (error) {
-            console.error('[GET IMAGE URL ERROR]', error);
-            return urlOrPath; // Return original if all fails
+        if (urlOrPath.startsWith('file') || urlOrPath.startsWith('content')) {
+            return urlOrPath;
         }
+        if (imageUrlCache[urlOrPath]) {
+            return imageUrlCache[urlOrPath];
+        }
+        const resolved = await resolveStorageImageUrl(urlOrPath, 86400);
+        setImageUrlCache((prev) => ({ ...prev, [urlOrPath]: resolved }));
+        return resolved;
     };
 
     // Component to handle image loading with signed URLs

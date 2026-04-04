@@ -1,10 +1,11 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Image, ActivityIndicator, Alert, Modal, TextInput, Linking, Platform, KeyboardAvoidingView } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Image, ActivityIndicator, Alert, Modal, TextInput, Linking, Platform, KeyboardAvoidingView, FlatList } from 'react-native';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { User, Shield, CreditCard, Bell, HelpCircle, LogOut, ChevronRight, Settings, Check, X, Languages, Phone as PhoneIcon, Mail } from 'lucide-react-native';
+import { User, Shield, CreditCard, Bell, HelpCircle, LogOut, ChevronRight, Settings, Check, X, Languages, Phone as PhoneIcon, Mail, ImagePlus } from 'lucide-react-native';
 import QuickHelp from '../../components/QuickHelp';
 import { supabase } from '../../lib/supabase';
+import { resolveStorageImageUrl } from '../../lib/storageImageUrl';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../../context/ThemeContext';
 import { refreshTranslations } from '../../lib/i18n';
@@ -28,6 +29,8 @@ export default function ProfileScreen() {
     const [updating, setUpdating] = useState(false);
     const [showLanguageModal, setShowLanguageModal] = useState(false);
     const [logoUrl, setLogoUrl] = useState<string>('');
+    const [galleryUrls, setGalleryUrls] = useState<string[]>([]);
+    const [gallerySigned, setGallerySigned] = useState<Record<string, string>>({});
 
     // Modals
     const [payoutModal, setPayoutModal] = useState(false);
@@ -62,52 +65,7 @@ export default function ProfileScreen() {
         }
     }, [openPayout, loading]);
 
-    // Helper function to get signed URL from file path or existing URL
-    const getImageUrl = async (urlOrPath: string | null | undefined): Promise<string> => {
-        if (!urlOrPath) return '';
-
-        try {
-            let fileName = urlOrPath;
-
-            // If it's already a full URL, extract the filename
-            if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
-                // Extract filename from Supabase storage URL
-                const urlMatch = urlOrPath.match(/\/ekatraa2025\/([^/?]+)/);
-                if (urlMatch && urlMatch[1]) {
-                    fileName = urlMatch[1];
-                } else {
-                    // If it's already a signed URL with token, return as-is
-                    if (urlOrPath.includes('token=')) {
-                        return urlOrPath;
-                    }
-                    // Otherwise try to extract filename from end of URL
-                    fileName = urlOrPath.split('/').pop()?.split('?')[0] || urlOrPath;
-                }
-            } else if (urlOrPath.includes('/')) {
-                // Extract filename from path
-                fileName = urlOrPath.split('/').pop() || urlOrPath;
-            }
-
-            // Generate signed URL (valid for 24 hours for better caching)
-            const { data, error } = await supabase.storage
-                .from('ekatraa2025')
-                .createSignedUrl(fileName, 86400); // 24 hours expiry for faster loading
-
-            if (error) {
-                console.error('[SIGNED URL ERROR]', error, 'fileName:', fileName);
-                // Fallback to public URL
-                const { data: { publicUrl } } = supabase.storage
-                    .from('ekatraa2025')
-                    .getPublicUrl(fileName);
-                return publicUrl;
-            }
-
-            return data.signedUrl;
-        } catch (error) {
-            console.error('[GET IMAGE URL ERROR]', error);
-            return urlOrPath; // Return original if all fails
-        }
-    };
+    const getImageUrl = (urlOrPath: string | null | undefined) => resolveStorageImageUrl(urlOrPath, 86400);
 
     const fetchProfile = async () => {
         try {
@@ -133,6 +91,18 @@ export default function ProfileScreen() {
             setVendor(data);
             setEditData(data);
 
+            const gUrls = Array.isArray(data.gallery_urls) ? data.gallery_urls.filter(Boolean) : [];
+            setGalleryUrls(gUrls);
+            const signedMap: Record<string, string> = {};
+            for (const ref of gUrls.slice(0, 12)) {
+                try {
+                    signedMap[ref] = await getImageUrl(ref);
+                } catch {
+                    signedMap[ref] = ref;
+                }
+            }
+            setGallerySigned(signedMap);
+
             // Load signed URL for logo if it exists
             if (data.logo_url && !data.logo_url.startsWith('file') && !data.logo_url.startsWith('content')) {
                 const signedUrl = await getImageUrl(data.logo_url);
@@ -145,7 +115,31 @@ export default function ProfileScreen() {
         }
     };
 
+    const validateFinancialData = (): string | null => {
+        if (editData.account_number && !/^\d{9,18}$/.test(editData.account_number)) {
+            return 'Account number must be 9–18 digits.';
+        }
+        if (editData.ifsc_code && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(editData.ifsc_code.toUpperCase())) {
+            return 'IFSC must be 11 characters (e.g. HDFC0001234).';
+        }
+        if (editData.gst_number && !/^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z0-9]{1}Z[A-Z0-9]{1}$/.test(editData.gst_number.toUpperCase())) {
+            return 'Invalid GST number format (e.g. 22AAAAA0000A1Z5).';
+        }
+        if (editData.pan_number && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(editData.pan_number.toUpperCase())) {
+            return 'PAN must be 10 characters (e.g. ABCDE1234F).';
+        }
+        if (editData.upi_id && editData.upi_id.length > 50) {
+            return 'UPI ID must be under 50 characters.';
+        }
+        return null;
+    };
+
     const handleUpdateProfile = async (closeModal: () => void) => {
+        const validationError = validateFinancialData();
+        if (validationError) {
+            Alert.alert('Validation Error', validationError);
+            return;
+        }
         try {
             setUpdating(true);
             const { data: { user } } = await supabase.auth.getUser();
@@ -154,12 +148,12 @@ export default function ProfileScreen() {
             const { error } = await supabase
                 .from('vendors')
                 .update({
-                    bank_name: editData.bank_name,
-                    account_number: editData.account_number,
-                    ifsc_code: editData.ifsc_code,
-                    upi_id: editData.upi_id,
-                    gst_number: editData.gst_number,
-                    pan_number: editData.pan_number,
+                    bank_name: editData.bank_name ? editData.bank_name.substring(0, 100) : null,
+                    account_number: editData.account_number || null,
+                    ifsc_code: editData.ifsc_code ? editData.ifsc_code.toUpperCase() : null,
+                    upi_id: editData.upi_id ? editData.upi_id.substring(0, 50) : null,
+                    gst_number: editData.gst_number ? editData.gst_number.toUpperCase() : null,
+                    pan_number: editData.pan_number ? editData.pan_number.toUpperCase() : null,
                 })
                 .eq('id', user.id);
 
@@ -251,11 +245,8 @@ export default function ProfileScreen() {
                 throw error;
             }
 
-            const { data: { publicUrl } } = supabase.storage
-                .from('ekatraa2025')
-                .getPublicUrl(fileName);
-
-            return publicUrl;
+            // Persist the object key (not the public URL) so signing always uses the real path.
+            return fileName;
         } catch (error: any) {
             console.error('[UPLOAD CATCH]', error);
             throw error;
@@ -295,6 +286,71 @@ export default function ProfileScreen() {
         } finally {
             setUpdating(false);
         }
+    };
+
+    const persistGallery = async (next: string[]) => {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+        const { error } = await supabase
+            .from('vendors')
+            .update({ gallery_urls: next })
+            .eq('id', user.id);
+        if (error) throw error;
+        setVendor((v: any) => (v ? { ...v, gallery_urls: next } : v));
+        setGalleryUrls(next);
+    };
+
+    const handleAddGalleryImage = async () => {
+        if (galleryUrls.length >= 12) {
+            Alert.alert('Limit', 'You can add up to 12 gallery photos.');
+            return;
+        }
+        const result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: 'images',
+            allowsEditing: true,
+            aspect: [4, 3],
+            quality: 0.85,
+        });
+        if (result.canceled) return;
+        try {
+            setUpdating(true);
+            const fileName = await uploadImage(result.assets[0].uri, 'gallery');
+            const next = [...galleryUrls, fileName];
+            await persistGallery(next);
+            const signed = await getImageUrl(fileName);
+            setGallerySigned((prev) => ({ ...prev, [fileName]: signed }));
+            Alert.alert('Success', 'Photo added to gallery');
+        } catch (e: any) {
+            Alert.alert('Error', e?.message || 'Could not add photo');
+        } finally {
+            setUpdating(false);
+        }
+    };
+
+    const handleRemoveGalleryImage = (ref: string) => {
+        Alert.alert('Remove photo', 'Remove this image from your gallery?', [
+            { text: 'Cancel', style: 'cancel' },
+            {
+                text: 'Remove',
+                style: 'destructive',
+                onPress: async () => {
+                    try {
+                        setUpdating(true);
+                        const next = galleryUrls.filter((u) => u !== ref);
+                        await persistGallery(next);
+                        setGallerySigned((prev) => {
+                            const n = { ...prev };
+                            delete n[ref];
+                            return n;
+                        });
+                    } catch (e: any) {
+                        Alert.alert('Error', e?.message || 'Could not remove');
+                    } finally {
+                        setUpdating(false);
+                    }
+                },
+            },
+        ]);
     };
 
     if (loading) {
@@ -428,6 +484,46 @@ export default function ProfileScreen() {
                     actionText="View Walkthrough"
                     onAction={() => console.log('View Walkthrough')}
                 />
+
+                <View className="mb-6 px-0">
+                    <Text className="text-lg font-bold mb-2" style={{ color: colors.text }}>Gallery</Text>
+                    <Text className="text-xs mb-3" style={{ color: colors.textSecondary }}>
+                        Showcase your work (up to 12 photos). Shown to customers on your profile.
+                    </Text>
+                    <FlatList
+                        horizontal
+                        data={[...galleryUrls, '__add__']}
+                        keyExtractor={(item, i) => (item === '__add__' ? 'add' : `${item}-${i}`)}
+                        showsHorizontalScrollIndicator={false}
+                        renderItem={({ item }) => {
+                            if (item === '__add__') {
+                                return (
+                                    <TouchableOpacity
+                                        onPress={handleAddGalleryImage}
+                                        disabled={updating || galleryUrls.length >= 12}
+                                        className="w-28 h-28 rounded-2xl mr-3 border-2 border-dashed items-center justify-center"
+                                        style={{ borderColor: colors.border, opacity: galleryUrls.length >= 12 ? 0.4 : 1 }}
+                                    >
+                                        <ImagePlus size={28} color={colors.primary} />
+                                        <Text className="text-[10px] font-bold mt-1" style={{ color: colors.textSecondary }}>Add</Text>
+                                    </TouchableOpacity>
+                                );
+                            }
+                            const uri = gallerySigned[item] || item;
+                            return (
+                                <View className="mr-3 relative">
+                                    <Image source={{ uri }} className="w-28 h-28 rounded-2xl" style={{ backgroundColor: colors.surface }} />
+                                    <TouchableOpacity
+                                        onPress={() => handleRemoveGalleryImage(item)}
+                                        className="absolute -top-1 -right-1 w-7 h-7 rounded-full bg-red-500 items-center justify-center"
+                                    >
+                                        <X size={14} color="#fff" />
+                                    </TouchableOpacity>
+                                </View>
+                            );
+                        }}
+                    />
+                </View>
 
                 <View className="mb-8">
                     {menuItems.map((item, index) => (

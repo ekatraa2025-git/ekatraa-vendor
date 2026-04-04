@@ -1,11 +1,11 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, FlatList, Modal, TextInput, Alert, Image, KeyboardAvoidingView, Platform, RefreshControl, Share } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Calendar, MapPin, Check, X, MessageSquare, ReceiptText, UploadCloud } from 'lucide-react-native';
+import { Calendar, MapPin, Check, X, MessageSquare, ReceiptText, UploadCloud, Play } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
 import { useTheme } from '../../context/ThemeContext';
 import { useFocusEffect } from 'expo-router';
-import { fetchVendorOrders, submitVendorQuotation, requestOrderCompletion, confirmOrderCompletion } from '../../lib/vendor-api';
+import { fetchVendorOrders, submitVendorQuotation, requestOrderCompletion, confirmOrderCompletion, requestOrderStart, confirmOrderStart } from '../../lib/vendor-api';
 import * as ImagePicker from 'expo-image-picker';
 import { readAsStringAsync } from 'expo-file-system/legacy';
 import DateTimePickerModal from 'react-native-modal-datetime-picker';
@@ -34,6 +34,12 @@ export default function OrdersScreen() {
     const [completionOtp, setCompletionOtp] = useState('');
     const [completionLoading, setCompletionLoading] = useState(false);
     const [completionStep, setCompletionStep] = useState<'request' | 'enter_otp'>('request');
+
+    const [startModalVisible, setStartModalVisible] = useState(false);
+    const [startOrder, setStartOrder] = useState<any>(null);
+    const [startOtp, setStartOtp] = useState('');
+    const [startLoading, setStartLoading] = useState(false);
+    const [startStep, setStartStep] = useState<'request' | 'enter_otp'>('request');
 
     const [quotationForm, setQuotationForm] = useState({
         serviceId: '',
@@ -93,7 +99,9 @@ export default function OrdersScreen() {
             } else {
                 let list = data || [];
                 if (filter === 'active') {
-                    list = list.filter((o: any) => ['allocated', 'pending', 'confirmed'].includes(o.status || ''));
+                    list = list.filter((o: any) =>
+                        ['allocated', 'pending', 'confirmed', 'in_progress'].includes(o.status || '')
+                    );
                 }
                 setOrders(list);
             }
@@ -267,6 +275,41 @@ Thank you for choosing Ekatraa!
         Alert.alert('Success', 'Receipt generated! You can save it from the share menu.');
     };
 
+    const handleRequestStart = async (order: any) => {
+        setStartOrder(order);
+        setStartModalVisible(true);
+        setStartStep('request');
+        setStartOtp('');
+        setStartLoading(true);
+        const { error } = await requestOrderStart(order.id);
+        setStartLoading(false);
+        if (error) {
+            Alert.alert('Error', error);
+            setStartModalVisible(false);
+        } else {
+            setStartStep('enter_otp');
+        }
+    };
+
+    const handleConfirmStart = async () => {
+        if (!startOrder || !startOtp.trim()) {
+            Alert.alert('Enter OTP', 'Please enter the OTP received from the customer.');
+            return;
+        }
+        setStartLoading(true);
+        const { error } = await confirmOrderStart(startOrder.id, startOtp.trim());
+        setStartLoading(false);
+        if (error) {
+            Alert.alert('Error', error);
+        } else {
+            Alert.alert('Success', 'Work started. You can request completion OTP when the service is done.');
+            setStartModalVisible(false);
+            setStartOrder(null);
+            setStartOtp('');
+            fetchOrders();
+        }
+    };
+
     const handleRequestCompletion = async (order: any) => {
         setCompletionOrder(order);
         setCompletionModalVisible(true);
@@ -418,7 +461,17 @@ Thank you for choosing Ekatraa!
                     </View>
                 )}
 
-                {submitted && item.status !== 'completed' && (
+                {submitted && item.status === 'confirmed' && item.status !== 'cancelled' && (
+                    <TouchableOpacity
+                        onPress={() => handleRequestStart(item)}
+                        className="mt-6 pt-6 flex-row items-center justify-center"
+                        style={{ borderTopWidth: 1, borderTopColor: colors.border }}
+                    >
+                        <Play size={18} color={colors.primary} />
+                        <Text className="font-bold ml-2" style={{ color: colors.primary }}>Start work</Text>
+                    </TouchableOpacity>
+                )}
+                {submitted && item.status === 'in_progress' && (
                     <TouchableOpacity
                         onPress={() => handleRequestCompletion(item)}
                         className="mt-6 pt-6 flex-row items-center justify-center"
@@ -524,6 +577,21 @@ Thank you for choosing Ekatraa!
                                     Advance Paid: ₹{Number(selectedOrder?.advance_paid || selectedOrder?.advance_amount || 0).toLocaleString()}
                                 </Text>
                             </View>
+                            {(selectedOrder?.work_started_at || selectedOrder?.work_completed_at) ? (
+                                <View>
+                                    <Text className="text-sm font-bold mb-2 uppercase tracking-widest text-[10px]" style={{ color: colors.text }}>Service milestones</Text>
+                                    {selectedOrder?.work_started_at ? (
+                                        <Text className="text-sm" style={{ color: colors.text }}>
+                                            Work started: {new Date(selectedOrder.work_started_at).toLocaleString()}
+                                        </Text>
+                                    ) : null}
+                                    {selectedOrder?.work_completed_at ? (
+                                        <Text className="text-sm mt-1" style={{ color: colors.text }}>
+                                            Work completed: {new Date(selectedOrder.work_completed_at).toLocaleString()}
+                                        </Text>
+                                    ) : null}
+                                </View>
+                            ) : null}
                             {(selectedOrder?.items || []).length > 0 && (
                                 <View>
                                     <Text className="text-sm font-bold mb-2 uppercase tracking-widest text-[10px]" style={{ color: colors.text }}>Items</Text>
@@ -533,7 +601,18 @@ Thank you for choosing Ekatraa!
                                 </View>
                             )}
                         </View>
-                        {hasQuotation(selectedOrder) && selectedOrder?.status !== 'completed' && selectedOrder?.status !== 'cancelled' && (
+                        {hasQuotation(selectedOrder) && selectedOrder?.status === 'confirmed' && selectedOrder?.status !== 'cancelled' && (
+                            <TouchableOpacity
+                                onPress={() => { setDetailModalVisible(false); handleRequestStart(selectedOrder); }}
+                                className="mt-6 py-4 rounded-2xl items-center"
+                                style={{ backgroundColor: colors.primary }}
+                            >
+                                <Play size={20} color="white" />
+                                <Text className="text-white font-bold mt-1">Start work</Text>
+                                <Text className="text-white/80 text-xs mt-1">Customer will see the OTP in ekatraa</Text>
+                            </TouchableOpacity>
+                        )}
+                        {hasQuotation(selectedOrder) && selectedOrder?.status === 'in_progress' && selectedOrder?.status !== 'cancelled' && (
                             <TouchableOpacity
                                 onPress={() => { setDetailModalVisible(false); handleRequestCompletion(selectedOrder); }}
                                 className="mt-6 py-4 rounded-2xl items-center"
@@ -747,6 +826,51 @@ Thank you for choosing Ekatraa!
                         </View>
                     </View>
                 </KeyboardAvoidingView>
+            </Modal>
+
+            {/* Start work OTP Modal */}
+            <Modal animationType="slide" transparent visible={startModalVisible} onRequestClose={() => { setStartModalVisible(false); setStartOtp(''); }}>
+                <View className="flex-1 justify-end bg-black/50">
+                    <View className="rounded-t-[40px] p-8 pb-12" style={{ backgroundColor: colors.surface }}>
+                        <View className="flex-row justify-between items-center mb-6">
+                            <Text className="text-xl font-bold" style={{ color: colors.text }}>Start work</Text>
+                            <TouchableOpacity onPress={() => { setStartModalVisible(false); setStartOtp(''); }}>
+                                <X size={24} color={colors.textSecondary} />
+                            </TouchableOpacity>
+                        </View>
+                        {startStep === 'request' && startLoading && (
+                            <View className="py-8 items-center">
+                                <ActivityIndicator size="large" color={colors.primary} />
+                                <Text className="mt-4" style={{ color: colors.textSecondary }}>Sending OTP to customer...</Text>
+                            </View>
+                        )}
+                        {startStep === 'enter_otp' && (
+                            <>
+                                <Text className="text-sm mb-4" style={{ color: colors.textSecondary }}>
+                                    The customer will see the OTP in the ekatraa app. Ask them for it and enter below to start work.
+                                </Text>
+                                <TextInput
+                                    placeholder="Enter 6-digit OTP"
+                                    placeholderTextColor={colors.textSecondary}
+                                    value={startOtp}
+                                    onChangeText={setStartOtp}
+                                    keyboardType="number-pad"
+                                    maxLength={6}
+                                    className="rounded-2xl px-5 py-4 text-center text-xl font-bold"
+                                    style={{ backgroundColor: colors.background, borderWidth: 2, borderColor: colors.border, color: colors.text }}
+                                />
+                                <TouchableOpacity
+                                    onPress={handleConfirmStart}
+                                    disabled={startLoading || startOtp.length !== 6}
+                                    className={`mt-6 py-4 rounded-2xl items-center ${startLoading || startOtp.length !== 6 ? 'opacity-50' : ''}`}
+                                    style={{ backgroundColor: colors.primary }}
+                                >
+                                    {startLoading ? <ActivityIndicator color="white" /> : <Text className="text-white font-bold">Confirm and start</Text>}
+                                </TouchableOpacity>
+                            </>
+                        )}
+                    </View>
+                </View>
             </Modal>
 
             {/* Mark Complete OTP Modal */}

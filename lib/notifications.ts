@@ -156,7 +156,7 @@ export function setupNotificationSubscription(
         event: 'INSERT',
         schema: 'public',
         table: 'vendor_notifications',
-        filter: `vendor_id=eq.${vendorId}`,
+        filter: `vendor_id=eq.${encodeURIComponent(String(vendorId))}`,
       },
       (payload: any) => {
         console.log('[Notifications] Received notification:', payload);

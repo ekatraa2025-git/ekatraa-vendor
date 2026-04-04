@@ -12,6 +12,8 @@ export default function OTPScreen() {
     const { colors } = useTheme();
     const [otp, setOtp] = useState(['', '', '', '', '', '']);
     const [loading, setLoading] = useState(false);
+    const [resendCooldown, setResendCooldown] = useState(60);
+    const [resendLoading, setResendLoading] = useState(false);
 
 
 
@@ -64,7 +66,15 @@ export default function OTPScreen() {
         }
     };
 
+    useEffect(() => {
+        if (resendCooldown <= 0) return;
+        const timer = setTimeout(() => setResendCooldown(c => c - 1), 1000);
+        return () => clearTimeout(timer);
+    }, [resendCooldown]);
+
     const handleResend = async () => {
+        if (resendCooldown > 0 || resendLoading) return;
+        setResendLoading(true);
         try {
             const fullPhone = `+91${phone}`;
             const { error } = await supabase.auth.signInWithOtp({
@@ -73,10 +83,13 @@ export default function OTPScreen() {
             if (error) {
                 Alert.alert('Error', error.message);
             } else {
+                setResendCooldown(60);
                 Alert.alert('Success', 'Verification code resent successfully.');
             }
         } catch (error) {
             Alert.alert('Error', 'Failed to resend code.');
+        } finally {
+            setResendLoading(false);
         }
     };
 
@@ -153,8 +166,10 @@ export default function OTPScreen() {
 
                     <View className="items-center">
                         <Text className="text-sm" style={{ color: colors.textSecondary }}>Didn't receive code?</Text>
-                        <TouchableOpacity onPress={handleResend} disabled={loading} className="mt-2">
-                            <Text className="text-primary font-bold">Resend OTP</Text>
+                        <TouchableOpacity onPress={handleResend} disabled={loading || resendCooldown > 0 || resendLoading} className="mt-2">
+                            <Text className="text-primary font-bold" style={{ opacity: (resendCooldown > 0 || resendLoading) ? 0.4 : 1 }}>
+                                {resendLoading ? 'Sending...' : resendCooldown > 0 ? `Resend in ${resendCooldown}s` : 'Resend OTP'}
+                            </Text>
                         </TouchableOpacity>
                     </View>
                 </ScrollView>

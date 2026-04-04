@@ -96,8 +96,14 @@ function AppContent() {
         // Listen for auth state changes
         let subscription: any = null;
         try {
-            const authStateResult = supabase.auth.onAuthStateChange((_event: any, session: any) => {
-                if (session?.user) {
+            const authStateResult = supabase.auth.onAuthStateChange((event: any, session: any) => {
+                if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') {
+                    if (session?.user) setVendorId(session.user.id);
+                } else if (event === 'SIGNED_OUT' || event === 'TOKEN_REFRESH_FAILED') {
+                    // Clear stale token and reset vendor state
+                    supabase.auth.signOut().catch(() => {});
+                    setVendorId(null);
+                } else if (session?.user) {
                     setVendorId(session.user.id);
                 } else {
                     setVendorId(null);

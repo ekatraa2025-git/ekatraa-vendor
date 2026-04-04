@@ -7,6 +7,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { readAsStringAsync } from 'expo-file-system/legacy';
 import Constants from 'expo-constants';
 import { supabase } from '../../lib/supabase';
+import { resolveStorageImageUrl } from '../../lib/storageImageUrl';
 import { useTheme } from '../../context/ThemeContext';
 
 // Helper function to get the correct API URL based on platform
@@ -92,42 +93,8 @@ export default function VerificationScreen() {
     };
 
     // Helper to get signed URL for images
-    const getSignedUrl = async (urlOrPath: string | null | undefined): Promise<string> => {
-        if (!urlOrPath) return '';
-        
-        try {
-            // If it's already a signed URL or full URL, return as-is
-            if (urlOrPath.includes('token=')) return urlOrPath;
-            
-            let fileName = urlOrPath;
-            
-            // Extract filename from URL if needed
-            if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
-                const urlMatch = urlOrPath.match(/\/ekatraa2025\/([^/?]+)/);
-                if (urlMatch && urlMatch[1]) {
-                    fileName = urlMatch[1];
-                } else {
-                    fileName = urlOrPath.split('/').pop()?.split('?')[0] || urlOrPath;
-                }
-            } else if (urlOrPath.includes('/')) {
-                fileName = urlOrPath.split('/').pop() || urlOrPath;
-            }
-
-            const { data, error } = await supabase.storage
-                .from('ekatraa2025')
-                .createSignedUrl(fileName, 3600); // 1 hour expiry
-
-            if (error || !data?.signedUrl) {
-                console.error('[Verify] Signed URL error:', error);
-                return urlOrPath;
-            }
-
-            return data.signedUrl;
-        } catch (error) {
-            console.error('[Verify] Error getting signed URL:', error);
-            return urlOrPath;
-        }
-    };
+    const getSignedUrl = (urlOrPath: string | null | undefined) =>
+        resolveStorageImageUrl(urlOrPath, 3600);
 
     // State for signed image URLs
     const [frontSignedUrl, setFrontSignedUrl] = useState<string>('');

@@ -3,6 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, Image, FlatList, ActivityIndi
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Plus, Edit3, Trash2, Eye, Star, ChevronRight, X, Check, Store, ChevronDown } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
+import { resolveStorageImageUrl } from '../../lib/storageImageUrl';
 import { useTheme } from '../../context/ThemeContext';
 import { readAsStringAsync } from 'expo-file-system/legacy';
 import Constants from 'expo-constants';
@@ -99,7 +100,9 @@ export default function ServicesScreen() {
                 (Constants.expoConfig?.extra?.API_URL);
 
             if (apiUrl) {
-                const response = await fetch(`${apiUrl}/api/public/services?category_id=${categoryId}`);
+                const servicesUrl = new URL(`${apiUrl}/api/public/services`);
+                servicesUrl.searchParams.set('category_id', String(categoryId));
+                const response = await fetch(servicesUrl.toString());
                 if (response.ok) {
                     const data = await response.json();
                     setCatalogServices(Array.isArray(data) ? data : []);
@@ -119,73 +122,12 @@ export default function ServicesScreen() {
         setRefreshing(false);
     };
 
-    // Helper function to get signed URL from file path or existing URL
     const getImageUrl = async (urlOrPath: string | null | undefined): Promise<string> => {
         if (!urlOrPath) return '';
-
-        try {
-            // Check cache first
-            if (imageUrlCache[urlOrPath]) {
-                return imageUrlCache[urlOrPath];
-            }
-
-            let fileName = urlOrPath;
-
-            // If it's already a full URL, extract the filename
-            if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
-                // If it's already a signed URL with token, return as-is
-                if (urlOrPath.includes('token=')) {
-                    imageUrlCache[urlOrPath] = urlOrPath;
-                    return urlOrPath;
-                }
-                // Extract filename from Supabase storage URL
-                // Format: https://...supabase.co/storage/v1/object/public/ekatraa2025/filename.jpg
-                const urlMatch = urlOrPath.match(/\/ekatraa2025\/([^/?]+)/);
-                if (urlMatch && urlMatch[1]) {
-                    fileName = urlMatch[1];
-                } else {
-                    // Otherwise try to extract filename from end of URL
-                    fileName = urlOrPath.split('/').pop()?.split('?')[0] || urlOrPath;
-                }
-            } else if (urlOrPath.includes('/')) {
-                // Extract filename from path
-                fileName = urlOrPath.split('/').pop() || urlOrPath;
-            }
-
-            // Generate signed URL (valid for 24 hours for better caching)
-            try {
-                const { data, error } = await supabase.storage
-                    .from('ekatraa2025')
-                    .createSignedUrl(fileName, 86400); // 24 hours expiry for faster loading
-
-                if (error) {
-                    console.error('[SIGNED URL ERROR]', error, 'fileName:', fileName);
-                    // Fallback to public URL
-                    const { data: { publicUrl } } = supabase.storage
-                        .from('ekatraa2025')
-                        .getPublicUrl(fileName);
-                    imageUrlCache[urlOrPath] = publicUrl;
-                    return publicUrl;
-                }
-
-                if (data && data.signedUrl) {
-                    imageUrlCache[urlOrPath] = data.signedUrl;
-                    return data.signedUrl;
-                }
-            } catch (storageError: any) {
-                console.error('[STORAGE API ERROR]', storageError);
-                // Fallback to public URL
-                const { data: { publicUrl } } = supabase.storage
-                    .from('ekatraa2025')
-                    .getPublicUrl(fileName);
-                return publicUrl;
-            }
-
-            return urlOrPath; // Return original if all fails
-        } catch (error) {
-            console.error('[GET IMAGE URL ERROR]', error);
-            return urlOrPath; // Return original if all fails
-        }
+        if (imageUrlCache[urlOrPath]) return imageUrlCache[urlOrPath];
+        const resolved = await resolveStorageImageUrl(urlOrPath, 86400);
+        imageUrlCache[urlOrPath] = resolved;
+        return resolved;
     };
 
     // Helper to convert base64 to ArrayBuffer

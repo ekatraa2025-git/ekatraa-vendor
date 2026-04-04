@@ -7,57 +7,13 @@ import * as ImagePicker from 'expo-image-picker';
 // @ts-ignore
 import * as Location from 'expo-location';
 import { supabase } from '../../lib/supabase';
+import { resolveStorageImageUrl } from '../../lib/storageImageUrl';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../../context/ThemeContext';
 import Constants from 'expo-constants';
 import { readAsStringAsync } from 'expo-file-system/legacy';
 
-// Helper function to get signed URL from file path or existing URL
-const getImageUrl = async (urlOrPath: string | null | undefined): Promise<string> => {
-    if (!urlOrPath) return '';
-
-    try {
-        let fileName = urlOrPath;
-
-        // If it's already a full URL, extract the filename
-        if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
-            // Extract filename from Supabase storage URL
-            const urlMatch = urlOrPath.match(/\/ekatraa2025\/([^/?]+)/);
-            if (urlMatch && urlMatch[1]) {
-                fileName = urlMatch[1];
-            } else {
-                // If it's already a signed URL with token, return as-is
-                if (urlOrPath.includes('token=')) {
-                    return urlOrPath;
-                }
-                // Otherwise try to extract filename from end of URL
-                fileName = urlOrPath.split('/').pop()?.split('?')[0] || urlOrPath;
-            }
-        } else if (urlOrPath.includes('/')) {
-            // Extract filename from path
-            fileName = urlOrPath.split('/').pop() || urlOrPath;
-        }
-
-        // Generate signed URL (valid for 24 hours for better caching)
-        const { data, error } = await supabase.storage
-            .from('ekatraa2025')
-            .createSignedUrl(fileName, 86400); // 24 hours expiry for faster loading
-
-        if (error) {
-            console.error('[SIGNED URL ERROR]', error, 'fileName:', fileName);
-            // Fallback to public URL
-            const { data: { publicUrl } } = supabase.storage
-                .from('ekatraa2025')
-                .getPublicUrl(fileName);
-            return publicUrl;
-        }
-
-        return data.signedUrl;
-    } catch (error) {
-        console.error('[GET IMAGE URL ERROR]', error);
-        return urlOrPath; // Return original if all fails
-    }
-};
+const getImageUrl = (urlOrPath: string | null | undefined) => resolveStorageImageUrl(urlOrPath, 86400);
 
 const MOCK_LOCATIONS = [
     'Indiranagar, Bengaluru, Karnataka, India',
@@ -308,8 +264,35 @@ export default function OnboardingScreen() {
 
     const handleNext = async () => {
         if (step < 3) {
+            // Validate current step before advancing
+            if (step === 1) {
+                if (!formData.businessName?.trim()) {
+                    Alert.alert('Required', 'Please enter your business name.');
+                    return;
+                }
+                if (formData.businessName.trim().length > 100) {
+                    Alert.alert('Too long', 'Business name must be under 100 characters.');
+                    return;
+                }
+                if (formData.description && formData.description.length > 1000) {
+                    Alert.alert('Too long', 'Description must be under 1000 characters.');
+                    return;
+                }
+            }
             setStep(step + 1);
         } else {
+            // Validate service price before submitting
+            if (formData.serviceName && formData.servicePrice) {
+                const price = parseFloat(formData.servicePrice);
+                if (isNaN(price) || price <= 0) {
+                    Alert.alert('Invalid price', 'Please enter a valid positive price.');
+                    return;
+                }
+                if (price > 9999999) {
+                    Alert.alert('Invalid price', 'Price cannot exceed ₹99,99,999.');
+                    return;
+                }
+            }
             try {
                 setLoading(true);
                 const { data: { user } } = await supabase.auth.getUser();
@@ -335,12 +318,14 @@ export default function OnboardingScreen() {
                     .from('vendors')
                     .upsert({
                         id: user.id,
-                        business_name: formData.businessName,
+                        business_name: formData.businessName.trim().substring(0, 100),
                         category: formData.category,
                         phone: formData.phone,
-                        address: locationQuery,
-                        description: formData.description,
+                        address: locationQuery.substring(0, 300),
+                        description: formData.description ? formData.description.substring(0, 1000) : null,
                         logo_url: finalLogoUrl,
+                        status: 'active',
+                        is_active: true,
                     });
 
                 if (vendorError) throw vendorError;
@@ -350,9 +335,9 @@ export default function OnboardingScreen() {
                         .from('services')
                         .insert({
                             vendor_id: user.id,
-                            name: formData.serviceName,
+                            name: formData.serviceName.trim().substring(0, 150),
                             category: formData.category || 'Service',
-                            price_amount: parseFloat(formData.servicePrice),
+                            price_amount: Math.min(parseFloat(formData.servicePrice), 9999999),
                             image_urls: finalServiceImageUrl ? [finalServiceImageUrl] : [],
                             is_active: true
                         } as any);
@@ -482,6 +467,7 @@ export default function OnboardingScreen() {
                             onChangeText={(text) => setFormData({ ...formData, businessName: text })}
                             className="flex-1 font-extrabold text-lg py-1"
                             style={{ color: colors.text }}
+                            maxLength={100}
                         />
                     </View>
                 </View>
@@ -516,13 +502,14 @@ export default function OnboardingScreen() {
                         value={formData.description}
                         onChangeText={(text) => setFormData({ ...formData, description: text })}
                         className="rounded-3xl px-5 py-5 font-bold text-base h-32"
-                        style={{ 
+                        style={{
                             textAlignVertical: 'top',
                             backgroundColor: colors.background,
                             borderWidth: 2,
                             borderColor: colors.border,
                             color: colors.text
                         }}
+                        maxLength={1000}
                     />
                 </View>
             </View>
@@ -725,6 +712,7 @@ export default function OnboardingScreen() {
                                     value={formData.servicePrice}
                                     onChangeText={(text) => setFormData({ ...formData, servicePrice: text })}
                                     className="flex-1 text-black font-extrabold text-xl"
+                                    maxLength={8}
                                 />
                             </View>
                         </View>
