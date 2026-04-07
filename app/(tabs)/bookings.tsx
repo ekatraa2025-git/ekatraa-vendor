@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, FlatList, Modal, TextInput, Alert, Image, KeyboardAvoidingView, Platform, RefreshControl, Share } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, FlatList, Modal, TextInput, Image, KeyboardAvoidingView, Platform, RefreshControl, Share } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Calendar, Clock, MapPin, Check, X, ChevronRight, Edit3, MessageSquare, ReceiptText, UploadCloud } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
 import { resolveStorageImageUrl } from '../../lib/storageImageUrl';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../../context/ThemeContext';
+import { useToast } from '../../context/ToastContext';
 import { formatReceiptData } from '../../lib/receipt';
 import * as ImagePicker from 'expo-image-picker';
 import { readAsStringAsync } from 'expo-file-system/legacy';
@@ -14,6 +15,7 @@ import DateTimePickerModal from 'react-native-modal-datetime-picker';
 export default function BookingsScreen() {
     const { t } = useTranslation();
     const { colors, isDarkMode } = useTheme();
+    const { showToast } = useToast();
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [bookings, setBookings] = useState<any[]>([]);
@@ -130,10 +132,10 @@ export default function BookingsScreen() {
             setBookings(bookings.map(b => b.id === id ? { ...b, status, notes: notes || b.notes } : b));
             setEditModalVisible(false);
             if (status !== editingBooking?.status) {
-                Alert.alert('Success', `Booking marked as ${status}`);
+                showToast({ variant: 'success', title: 'Booking updated', message: `Booking marked as ${status}.` });
             }
         } catch (error: any) {
-            Alert.alert('Error', error.message || 'Failed to update booking');
+            showToast({ variant: 'error', title: 'Could not update', message: error.message || 'Failed to update booking' });
         } finally {
             setUpdating(false);
         }
@@ -141,7 +143,7 @@ export default function BookingsScreen() {
 
     const generateReceipt = async (booking: any) => {
         if (!booking || !vendor) {
-            Alert.alert('Error', 'Booking or vendor data not available.');
+            showToast({ variant: 'error', title: 'Missing data', message: 'Booking or vendor data not available.' });
             return;
         }
 
@@ -194,10 +196,10 @@ Thank you for choosing Ekatraa!
                 title: `Receipt_${receiptId}.txt`,
             });
             
-            Alert.alert('Success', 'Receipt generated! You can save it from the share menu.');
+            showToast({ variant: 'success', title: 'Receipt ready', message: 'You can save it from the share menu.' });
         } catch (error: any) {
             console.error('Error generating receipt:', error);
-            Alert.alert('Error', error.message || 'Failed to generate receipt.');
+            showToast({ variant: 'error', title: 'Receipt failed', message: error.message || 'Failed to generate receipt.' });
         }
     };
 
@@ -280,12 +282,12 @@ Thank you for choosing Ekatraa!
 
     const handleSubmitQuotation = async () => {
         if (!quotationForm.serviceName || !quotationForm.amount || !quotationForm.venueAddress) {
-            Alert.alert('Missing Info', 'Please select a service, fill in Amount and Venue Address');
+            showToast({ variant: 'warning', title: 'Missing info', message: 'Please select a service, fill in amount and venue address.' });
             return;
         }
 
         if (!quotationForm.vendorTcAccepted) {
-            Alert.alert('Terms Required', 'Please accept the terms and conditions to proceed');
+            showToast({ variant: 'warning', title: 'Terms required', message: 'Please accept the terms and conditions to proceed.' });
             return;
         }
 
@@ -396,16 +398,15 @@ Thank you for choosing Ekatraa!
                 // Don't fail the quotation submission if revenue update fails
             }
 
-            Alert.alert('Success', 'Quotation submitted successfully! Booking is now confirmed.', [
-                {
-                    text: 'OK', onPress: () => {
-                        setQuotationModalVisible(false);
-                        fetchBookings();
-                    }
-                }
-            ]);
+            setQuotationModalVisible(false);
+            fetchBookings();
+            showToast({
+                variant: 'success',
+                title: 'Quotation submitted',
+                message: 'Booking is now confirmed.',
+            });
         } catch (error: any) {
-            Alert.alert('Error', error.message || 'Failed to submit quotation');
+            showToast({ variant: 'error', title: 'Could not submit', message: error.message || 'Failed to submit quotation' });
         } finally {
             setSavingQuotation(false);
         }
@@ -532,14 +533,14 @@ Thank you for choosing Ekatraa!
 
     if (loading) {
         return (
-            <SafeAreaView className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
+            <SafeAreaView edges={['left', 'right']} className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
                 <ActivityIndicator size="large" color="#FF6B00" />
             </SafeAreaView>
         );
     }
 
     return (
-        <SafeAreaView className="flex-1" style={{ backgroundColor: colors.background }}>
+        <SafeAreaView edges={['left', 'right']} className="flex-1" style={{ backgroundColor: colors.background }}>
             <View className="px-6 py-4">
                 <Text className="text-2xl font-bold" style={{ color: colors.text }}>Bookings</Text>
                 <Text className="text-xs" style={{ color: colors.textSecondary }}>Manage client requests</Text>

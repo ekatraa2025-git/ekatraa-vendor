@@ -1,19 +1,42 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, Image, KeyboardAvoidingView, Platform, ActivityIndicator, Alert, Modal, FlatList } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, Image, KeyboardAvoidingView, Platform, ActivityIndicator, Modal, FlatList } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Camera, Plus, Store, User, MapPin, Check, Search, X, ArrowRight, ChevronDown, Tag } from 'lucide-react-native';
+import { Camera, Plus, Store, MapPin, Check, Search, X, ArrowRight, ChevronDown, Tag } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 // @ts-ignore
 import * as Location from 'expo-location';
-import { supabase } from '../../lib/supabase';
+import type { User } from '@supabase/supabase-js';
+import { supabase, resolveSupabaseUser } from '../../lib/supabase';
 import { resolveStorageImageUrl } from '../../lib/storageImageUrl';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../../context/ThemeContext';
-import Constants from 'expo-constants';
+import { useToast } from '../../context/ToastContext';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { readAsStringAsync } from 'expo-file-system/legacy';
 
+/** Load react-native-maps on native; may work in Expo Go (iOS) or fail (e.g. Android Expo Go). */
+let MapView: React.ComponentType<any> | null = null;
+let Marker: React.ComponentType<any> | null = null;
+let PROVIDER_GOOGLE: any;
+if (Platform.OS !== 'web') {
+    try {
+        const RNM = require('react-native-maps');
+        MapView = RNM.default;
+        Marker = RNM.Marker;
+        PROVIDER_GOOGLE = RNM.PROVIDER_GOOGLE;
+    } catch {
+        /* Maps native module missing in this binary */
+    }
+}
+const mapModuleLoaded = !!(MapView && Marker);
+/** True when running in Expo Go (maps often unavailable on Android). Used for copy only. */
+const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+
 const getImageUrl = (urlOrPath: string | null | undefined) => resolveStorageImageUrl(urlOrPath, 86400);
+
+/** Default map center (India); pin moves with user / map. */
+const DEFAULT_MAP_COORD = { latitude: 20.5937, longitude: 78.9629 };
 
 const MOCK_LOCATIONS = [
     'Indiranagar, Bengaluru, Karnataka, India',
@@ -31,7 +54,9 @@ export default function OnboardingScreen() {
     const router = useRouter();
     const { t } = useTranslation();
     const { colors } = useTheme();
-    const { phone: phoneParam } = useLocalSearchParams<{ phone: string }>();
+    const { showToast } = useToast();
+    const { phone: phoneParam, step: stepParamRaw } = useLocalSearchParams<{ phone?: string; step?: string | string[] }>();
+    const stepParam = Array.isArray(stepParamRaw) ? stepParamRaw[0] : stepParamRaw;
     const [step, setStep] = useState(1);
     const [profileImage, setProfileImage] = useState<string | null>(null);
     const [serviceImage, setServiceImage] = useState<string | null>(null);
@@ -46,6 +71,8 @@ export default function OnboardingScreen() {
     const [categories, setCategories] = useState<{ id: string, name: string }[]>([]);
     const [showCategoryModal, setShowCategoryModal] = useState(false);
     const [loadingCategories, setLoadingCategories] = useState(false);
+    const mapRef = useRef<any>(null);
+    const [markerCoord, setMarkerCoord] = useState<{ latitude: number; longitude: number }>(DEFAULT_MAP_COORD);
 
     const [formData, setFormData] = useState({
         businessName: '',
@@ -62,6 +89,14 @@ export default function OnboardingScreen() {
         fetchInitialData();
         fetchCategories();
     }, []);
+
+    /** Deep-link or profile: open registration step (1–3). */
+    useEffect(() => {
+        const s = stepParam != null ? parseInt(String(stepParam), 10) : NaN;
+        if (s >= 1 && s <= 3 && !Number.isNaN(s)) {
+            setStep(s);
+        }
+    }, [stepParam]);
 
     const fetchCategories = async () => {
         try {
@@ -100,7 +135,7 @@ export default function OnboardingScreen() {
     const fetchInitialData = async () => {
         try {
             setFetching(true);
-            const { data: { user } } = await supabase.auth.getUser();
+            const user = await resolveSupabaseUser();
             if (!user) return;
 
             const { data: vendor, error } = await supabase
@@ -119,6 +154,11 @@ export default function OnboardingScreen() {
                     address: vendor.address || prev.address,
                 }));
                 if (vendor.address) setLocationQuery(vendor.address);
+                const lat = (vendor as { latitude?: number | null }).latitude;
+                const lng = (vendor as { longitude?: number | null }).longitude;
+                if (typeof lat === 'number' && typeof lng === 'number' && !Number.isNaN(lat) && !Number.isNaN(lng)) {
+                    setMarkerCoord({ latitude: lat, longitude: lng });
+                }
                 if (vendor.logo_url) {
                     setProfileImage(vendor.logo_url);
                     // Load signed URL for profile image
@@ -156,34 +196,71 @@ export default function OnboardingScreen() {
         }
     }, [locationQuery]);
 
+    const formatGeocodedLine = (a: {
+        name?: string | null;
+        street?: string | null;
+        city?: string | null;
+        region?: string | null;
+        postalCode?: string | null;
+        country?: string | null;
+    }) =>
+        `${a.name || ''}, ${a.street || ''}, ${a.city || ''}, ${a.region || ''}, ${a.postalCode || ''}, ${a.country || ''}`
+            .replace(/^, |, $/g, '')
+            .replace(/, ,/g, ',');
+
+    const applyMapCoordinate = async (lat: number, lng: number, opts?: { animate?: boolean }) => {
+        const animate = opts?.animate !== false;
+        setMarkerCoord({ latitude: lat, longitude: lng });
+        const region = { latitude: lat, longitude: lng, latitudeDelta: 0.02, longitudeDelta: 0.02 };
+        if (animate && mapRef.current) {
+            mapRef.current.animateToRegion(region, 350);
+        }
+        try {
+            const address = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lng });
+            if (address.length > 0) {
+                const fullAddress = formatGeocodedLine(address[0]);
+                setLocationQuery(fullAddress);
+                setFormData(prev => ({ ...prev, address: fullAddress }));
+                setSuggestions([]);
+            }
+        } catch {
+            /* keep pin; user can edit address */
+        }
+    };
+
     const getCurrentLocation = async () => {
         try {
             setLoading(true);
             let { status } = await Location.requestForegroundPermissionsAsync();
             if (status !== 'granted') {
-                Alert.alert('Permission Denied', 'Please allow location access to auto-fill your address.');
+                showToast({ variant: 'warning', title: 'Permission denied', message: 'Please allow location access to auto-fill your address.' });
                 return;
             }
 
             let location = await Location.getCurrentPositionAsync({});
-            let address = await Location.reverseGeocodeAsync({
-                latitude: location.coords.latitude,
-                longitude: location.coords.longitude,
-            });
-
-            if (address.length > 0) {
-                const a = address[0];
-                const fullAddress = `${a.name || ''}, ${a.street || ''}, ${a.city || ''}, ${a.region || ''}, ${a.postalCode || ''}, ${a.country || ''}`.replace(/^, |, $/g, '').replace(/, ,/g, ',');
-                setLocationQuery(fullAddress);
-                setFormData(prev => ({ ...prev, address: fullAddress }));
-                setSuggestions([]);
-            }
+            await applyMapCoordinate(location.coords.latitude, location.coords.longitude, { animate: true });
         } catch (error: any) {
-            Alert.alert('Error', 'Could not fetch your current location.');
+            showToast({ variant: 'error', title: 'Location error', message: 'Could not fetch your current location.' });
         } finally {
             setLoading(false);
         }
     };
+
+    useEffect(() => {
+        if (step !== 2 || fetching) return;
+        const id = setTimeout(() => {
+            mapRef.current?.animateToRegion(
+                {
+                    latitude: markerCoord.latitude,
+                    longitude: markerCoord.longitude,
+                    latitudeDelta: 0.02,
+                    longitudeDelta: 0.02,
+                },
+                300
+            );
+        }, 200);
+        return () => clearTimeout(id);
+    }, [step, fetching, markerCoord.latitude, markerCoord.longitude]);
 
     const pickImage = async (type: 'profile' | 'service') => {
         let result = await ImagePicker.launchImageLibraryAsync({
@@ -214,9 +291,9 @@ export default function OnboardingScreen() {
         return bytes.buffer;
     };
 
-    const uploadImage = async (uri: string, prefix: string = 'image') => {
+    const uploadImage = async (uri: string, prefix: string = 'image', sessionUser?: User | null) => {
         try {
-            const { data: { user } } = await supabase.auth.getUser();
+            const user = sessionUser ?? (await resolveSupabaseUser());
             if (!user) throw new Error('Not authenticated');
 
             const fileName = `${prefix}-${Date.now()}-${Math.random().toString(36).substring(7)}.jpg`;
@@ -267,15 +344,21 @@ export default function OnboardingScreen() {
             // Validate current step before advancing
             if (step === 1) {
                 if (!formData.businessName?.trim()) {
-                    Alert.alert('Required', 'Please enter your business name.');
+                    showToast({ variant: 'warning', title: 'Required', message: 'Please enter your business name.' });
                     return;
                 }
                 if (formData.businessName.trim().length > 100) {
-                    Alert.alert('Too long', 'Business name must be under 100 characters.');
+                    showToast({ variant: 'warning', title: 'Too long', message: 'Business name must be under 100 characters.' });
                     return;
                 }
                 if (formData.description && formData.description.length > 1000) {
-                    Alert.alert('Too long', 'Description must be under 1000 characters.');
+                    showToast({ variant: 'warning', title: 'Too long', message: 'Description must be under 1000 characters.' });
+                    return;
+                }
+            }
+            if (step === 2) {
+                if (!locationQuery.trim()) {
+                    showToast({ variant: 'warning', title: 'Required', message: 'Please pin your location on the map or enter your service address.' });
                     return;
                 }
             }
@@ -285,22 +368,30 @@ export default function OnboardingScreen() {
             if (formData.serviceName && formData.servicePrice) {
                 const price = parseFloat(formData.servicePrice);
                 if (isNaN(price) || price <= 0) {
-                    Alert.alert('Invalid price', 'Please enter a valid positive price.');
+                    showToast({ variant: 'warning', title: 'Invalid price', message: 'Please enter a valid positive price.' });
                     return;
                 }
                 if (price > 9999999) {
-                    Alert.alert('Invalid price', 'Price cannot exceed ₹99,99,999.');
+                    showToast({ variant: 'warning', title: 'Invalid price', message: 'Price cannot exceed ₹99,99,999.' });
                     return;
                 }
             }
             try {
                 setLoading(true);
-                const { data: { user } } = await supabase.auth.getUser();
-                if (!user) throw new Error('No user found');
+                const user = await resolveSupabaseUser();
+                if (!user) {
+                    showToast({
+                        variant: 'error',
+                        title: 'Not signed in',
+                        message: 'Your session could not be loaded. Please sign in again.',
+                    });
+                    router.replace('/(auth)/login');
+                    return;
+                }
 
                 let finalLogoUrl = profileImage;
                 if (profileImage && (profileImage.startsWith('file:') || profileImage.startsWith('content:'))) {
-                    finalLogoUrl = await uploadImage(profileImage, 'logo');
+                    finalLogoUrl = await uploadImage(profileImage, 'logo', user);
                 } else if (profileImage && !profileImage.startsWith('http')) {
                     // If it's already a filename, keep it
                     finalLogoUrl = profileImage;
@@ -308,7 +399,7 @@ export default function OnboardingScreen() {
 
                 let finalServiceImageUrl = serviceImage;
                 if (serviceImage && (serviceImage.startsWith('file:') || serviceImage.startsWith('content:'))) {
-                    finalServiceImageUrl = await uploadImage(serviceImage, 'service');
+                    finalServiceImageUrl = await uploadImage(serviceImage, 'service', user);
                 } else if (serviceImage && !serviceImage.startsWith('http')) {
                     // If it's already a filename, keep it
                     finalServiceImageUrl = serviceImage;
@@ -322,6 +413,8 @@ export default function OnboardingScreen() {
                         category: formData.category,
                         phone: formData.phone,
                         address: locationQuery.substring(0, 300),
+                        latitude: markerCoord.latitude,
+                        longitude: markerCoord.longitude,
                         description: formData.description ? formData.description.substring(0, 1000) : null,
                         logo_url: finalLogoUrl,
                         status: 'active',
@@ -348,7 +441,7 @@ export default function OnboardingScreen() {
                 router.replace('/(tabs)/dashboard');
             } catch (error: any) {
                 console.error('Onboarding error:', error);
-                Alert.alert('Error', error.message || 'Failed to save onboarding data.');
+                showToast({ variant: 'error', title: 'Could not save', message: error.message || 'Failed to save onboarding data.' });
             } finally {
                 setLoading(false);
             }
@@ -548,12 +641,67 @@ export default function OnboardingScreen() {
                             <Text className="text-[10px] font-bold uppercase tracking-widest" style={{ color: colors.text }}>{t('pinpoint_on_map')}</Text>
                             <TouchableOpacity
                                 onPress={getCurrentLocation}
-                                className="flex-row items-center bg-primary/10 px-3 py-1.5 rounded-full"
+                                activeOpacity={0.85}
+                                className="flex-row items-center px-3 py-2 rounded-full"
+                                style={{
+                                    backgroundColor: `${colors.primary}22`,
+                                    borderWidth: 1,
+                                    borderColor: `${colors.primary}55`,
+                                }}
                             >
-                                <MapPin size={14} color="#FF6B00" strokeWidth={2.5} />
-                                <Text className="text-primary text-xs font-bold ml-1">{t('auto_detect')}</Text>
+                                <MapPin size={16} color={colors.primary} strokeWidth={2.5} />
+                                <Text className="text-xs font-bold ml-1.5" style={{ color: colors.primary }}>
+                                    {t('auto_detect')}
+                                </Text>
                             </TouchableOpacity>
                         </View>
+                        {Platform.OS !== 'web' && mapModuleLoaded && MapView && Marker && (
+                            <View className="mb-3 overflow-hidden rounded-2xl" style={{ height: 200, borderWidth: 1, borderColor: colors.border }}>
+                                <MapView
+                                    ref={mapRef}
+                                    style={{ width: '100%', height: '100%' }}
+                                    provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+                                    initialRegion={{
+                                        latitude: markerCoord.latitude,
+                                        longitude: markerCoord.longitude,
+                                        latitudeDelta: 0.02,
+                                        longitudeDelta: 0.02,
+                                    }}
+                                    showsUserLocation
+                                    mapPadding={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                                    onPress={(e) => {
+                                        const { latitude, longitude } = e.nativeEvent.coordinate;
+                                        applyMapCoordinate(latitude, longitude, { animate: true });
+                                    }}
+                                >
+                                    <Marker
+                                        coordinate={markerCoord}
+                                        draggable
+                                        onDragEnd={(e) => {
+                                            const { latitude, longitude } = e.nativeEvent.coordinate;
+                                            applyMapCoordinate(latitude, longitude, { animate: false });
+                                        }}
+                                    />
+                                </MapView>
+                            </View>
+                        )}
+                        {Platform.OS !== 'web' && !mapModuleLoaded && (
+                            <View
+                                className="mb-3 rounded-2xl px-4 py-6"
+                                style={{ borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface }}
+                            >
+                                <Text className="text-sm font-bold" style={{ color: colors.text }}>
+                                    {t('map_preview_unavailable_title', { defaultValue: 'Map preview' })}
+                                </Text>
+                                <Text className="text-xs mt-2 leading-5" style={{ color: colors.textSecondary }}>
+                                    {t('map_preview_unavailable_body', {
+                                        defaultValue: isExpoGo
+                                            ? 'Use Auto-detect or type your address below. In Expo Go, maps may be limited; use a development build with react-native-maps for the full map.'
+                                            : 'Use Auto-detect or enter your address below. For the interactive map, add react-native-maps to your native build and configure Google Maps.',
+                                    })}
+                                </Text>
+                            </View>
+                        )}
                         <View className="flex-row items-start px-2 py-2">
                             <MapPin size={24} color={colors.text} className="mr-3 mt-1" strokeWidth={2} />
                             <TextInput
@@ -744,7 +892,12 @@ export default function OnboardingScreen() {
                 className="flex-1"
                 keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
             >
-                <ScrollView contentContainerStyle={{ flexGrow: 1 }} className="px-6 pt-10 pb-12" keyboardShouldPersistTaps="handled">
+                <ScrollView
+                    contentContainerStyle={{ flexGrow: 1 }}
+                    className="px-6 pt-10 pb-12"
+                    keyboardShouldPersistTaps="handled"
+                    nestedScrollEnabled
+                >
                     {fetching ? (
                         <View className="flex-1 items-center justify-center py-20">
                             <ActivityIndicator size="large" color="#FF6B00" />

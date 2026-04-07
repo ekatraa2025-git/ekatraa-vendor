@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Image, Alert, Share, Platform } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Image, Share, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ChevronLeft, Calendar, FileText, Download, Share2, CheckCircle2, XCircle, Clock, MapPin, ReceiptText } from 'lucide-react-native';
@@ -7,12 +7,14 @@ import { readAsStringAsync } from 'expo-file-system/legacy';
 import { supabase } from '../../lib/supabase';
 import { resolveStorageImageUrl } from '../../lib/storageImageUrl';
 import { useTheme } from '../../context/ThemeContext';
+import { useToast } from '../../context/ToastContext';
 import BottomNav from '../../components/BottomNav';
 
 export default function QuotationDetail() {
     const { id } = useLocalSearchParams();
     const router = useRouter();
     const { colors, isDarkMode } = useTheme();
+    const { showToast, showConfirm } = useToast();
     const [loading, setLoading] = useState(true);
     const [quotation, setQuotation] = useState<any>(null);
     const [vendor, setVendor] = useState<any>(null);
@@ -88,7 +90,7 @@ export default function QuotationDetail() {
             setVendor(vendorData);
         } catch (error) {
             console.error('Error fetching quotation details:', error);
-            Alert.alert('Error', 'Could not load quotation details.');
+            showToast({ variant: 'error', title: 'Could not load', message: 'Could not load quotation details.' });
         } finally {
             setLoading(false);
         }
@@ -106,7 +108,7 @@ export default function QuotationDetail() {
 
     const generateReceipt = async () => {
         if (!quotation || !vendor) {
-            Alert.alert('Error', 'Quotation or vendor data not available.');
+            showToast({ variant: 'error', title: 'Missing data', message: 'Quotation or vendor data not available.' });
             return;
         }
 
@@ -154,11 +156,42 @@ Thank you for choosing Ekatraa!
                 title: `Receipt_${receiptId}.txt`,
             });
             
-            Alert.alert('Success', 'Receipt generated! You can save it from the share menu.');
+            showToast({ variant: 'success', title: 'Receipt ready', message: 'You can save it from the share menu.' });
         } catch (error: any) {
             console.error('Error generating receipt:', error);
-            Alert.alert('Error', error.message || 'Failed to generate receipt.');
+            showToast({ variant: 'error', title: 'Receipt failed', message: error.message || 'Failed to generate receipt.' });
         }
+    };
+
+    const handleCancelQuotation = () => {
+        if (!quotation?.id) return;
+        showConfirm({
+            title: 'Cancel quotation',
+            message: 'Are you sure you want to withdraw this quotation?',
+            confirmLabel: 'Yes, cancel',
+            destructive: true,
+            onConfirm: async () => {
+                try {
+                    const {
+                        data: { user },
+                    } = await supabase.auth.getUser();
+                    if (!user) {
+                        showToast({ variant: 'error', title: 'Not signed in', message: 'Please log in again.' });
+                        return;
+                    }
+                    const { error } = await supabase
+                        .from('quotations')
+                        .update({ status: 'declined' })
+                        .eq('id', quotation.id)
+                        .eq('vendor_id', user.id);
+                    if (error) throw error;
+                    await fetchQuotation();
+                    showToast({ variant: 'success', title: 'Quotation withdrawn', message: 'Your bid was cancelled.' });
+                } catch (e: any) {
+                    showToast({ variant: 'error', title: 'Could not cancel', message: e?.message || 'Please try again.' });
+                }
+            },
+        });
     };
 
     if (loading) {
@@ -384,7 +417,7 @@ Thank you for choosing Ekatraa!
                     <View className="flex-row space-x-4 mb-10">
                         <TouchableOpacity
                             className="flex-1 bg-red-50 py-5 rounded-2xl items-center border border-red-100"
-                            onPress={() => Alert.alert('Cancel', 'Are you sure you want to cancel this quotation?', [{ text: 'Cancel' }, { text: 'Yes', style: 'destructive' }])}
+                            onPress={handleCancelQuotation}
                         >
                             <Text className="text-red-600 font-extrabold text-base">Cancel</Text>
                         </TouchableOpacity>

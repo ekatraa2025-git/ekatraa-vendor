@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, Animated, Dimensions, TouchableOpacity } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { supabase } from '../lib/supabase';
+import { supabase, recoverFromAuthStorageError } from '../lib/supabase';
 import { useTranslation } from 'react-i18next';
 import '../lib/i18n';
 import Logo from '../components/Logo';
@@ -85,7 +85,7 @@ function SplashScreen() {
 
                 // If there's an auth error (e.g. invalid refresh token), clear the stale session
                 if (result?.error) {
-                    await supabase.auth.signOut().catch(() => {});
+                    await recoverFromAuthStorageError(result.error);
                     router.replace('/(auth)/login');
                 } else if (result?.data?.session) {
                     router.replace('/(tabs)/dashboard');
@@ -98,8 +98,10 @@ function SplashScreen() {
             }
         } catch (error) {
             clearTimeout(maxTimeout);
-            // Sign out to clear any stale token that may have caused the error
-            await supabase.auth.signOut().catch(() => {});
+            const msg = error instanceof Error ? error.message : String(error);
+            if (msg !== 'Session check timeout') {
+                await recoverFromAuthStorageError({ message: msg });
+            }
             router.replace('/(auth)/login');
         }
     };

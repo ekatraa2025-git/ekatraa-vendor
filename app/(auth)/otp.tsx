@@ -1,15 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ChevronLeft, CheckCircle2 } from 'lucide-react-native';
-import { supabase } from '../../lib/supabase';
+import { recoverFromAuthStorageError, supabase } from '../../lib/supabase';
 import { useTheme } from '../../context/ThemeContext';
+import { useToast } from '../../context/ToastContext';
 
 export default function OTPScreen() {
     const router = useRouter();
     const { phone } = useLocalSearchParams<{ phone: string }>();
     const { colors } = useTheme();
+    const { showToast } = useToast();
     const [otp, setOtp] = useState(['', '', '', '', '', '']);
     const [loading, setLoading] = useState(false);
     const [resendCooldown, setResendCooldown] = useState(60);
@@ -20,7 +22,7 @@ export default function OTPScreen() {
     const handleVerify = async () => {
         const otpString = otp.join('');
         if (otpString.length !== 6) {
-            Alert.alert('Invalid OTP', 'Please enter a 6-digit verification code.');
+            showToast({ variant: 'warning', title: 'Invalid OTP', message: 'Please enter a 6-digit verification code.' });
             return;
         }
 
@@ -28,39 +30,63 @@ export default function OTPScreen() {
             setLoading(true);
             const fullPhone = `+91${phone}`;
 
-            const { error } = await supabase.auth.verifyOtp({
+            const { data: verifyData, error } = await supabase.auth.verifyOtp({
                 phone: fullPhone,
                 token: otpString,
                 type: 'sms',
             });
 
             if (error) {
-                Alert.alert('Verification Failed', error.message);
+                showToast({ variant: 'error', title: 'Verification failed', message: error.message });
                 return;
             }
 
-            // Check if user already has a vendor profile
-            const { data: { user } } = await supabase.auth.getUser();
-            if (user) {
-                const { data: vendor } = await supabase
-                    .from('vendors')
-                    .select('*')
-                    .eq('id', user.id)
-                    .single();
-
-                if (vendor) {
-                    // Already has profile, go to dashboard
-                    router.replace('/(tabs)/dashboard');
-                } else {
-                    // New user, go to onboarding
-                    router.replace({
-                        pathname: '/onboarding',
-                        params: { phone }
-                    });
+            // Persist session immediately so the next screen always reads a stored session (avoids race with SecureStore).
+            if (
+                verifyData?.session?.access_token &&
+                verifyData?.session?.refresh_token &&
+                typeof supabase.auth.setSession === 'function'
+            ) {
+                const { error: sessionErr } = await supabase.auth.setSession({
+                    access_token: verifyData.session.access_token,
+                    refresh_token: verifyData.session.refresh_token,
+                });
+                if (sessionErr) {
+                    console.warn('[OTP] setSession after verify:', sessionErr.message);
                 }
             }
+
+            let user = verifyData?.session?.user ?? verifyData?.user ?? null;
+            if (!user) {
+                const { data: { user: u2 }, error: userErr } = await supabase.auth.getUser();
+                if (userErr) {
+                    await recoverFromAuthStorageError(userErr);
+                    showToast({ variant: 'error', title: 'Session error', message: 'Please try again.' });
+                    return;
+                }
+                user = u2;
+            }
+            if (!user) {
+                showToast({ variant: 'error', title: 'Session error', message: 'Could not complete sign-in. Please try again.' });
+                return;
+            }
+
+            const { data: vendor } = await supabase
+                .from('vendors')
+                .select('*')
+                .eq('id', user.id)
+                .single();
+
+            if (vendor) {
+                router.replace('/(tabs)/dashboard');
+            } else {
+                router.replace({
+                    pathname: '/onboarding',
+                    params: { phone }
+                });
+            }
         } catch (error: any) {
-            Alert.alert('Error', 'Something went wrong. Please try again.');
+            showToast({ variant: 'error', title: 'Something went wrong', message: 'Please try again.' });
         } finally {
             setLoading(false);
         }
@@ -81,13 +107,13 @@ export default function OTPScreen() {
                 phone: fullPhone,
             });
             if (error) {
-                Alert.alert('Error', error.message);
+                showToast({ variant: 'error', title: 'Could not resend', message: error.message });
             } else {
                 setResendCooldown(60);
-                Alert.alert('Success', 'Verification code resent successfully.');
+                showToast({ variant: 'success', title: 'Code sent', message: 'Verification code resent successfully.' });
             }
         } catch (error) {
-            Alert.alert('Error', 'Failed to resend code.');
+            showToast({ variant: 'error', title: 'Could not resend', message: 'Failed to resend code.' });
         } finally {
             setResendLoading(false);
         }

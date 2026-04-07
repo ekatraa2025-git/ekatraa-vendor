@@ -1,5 +1,5 @@
 import { Tabs, useRouter } from 'expo-router';
-import { View, TouchableOpacity, Text, Platform } from 'react-native';
+import { View, TouchableOpacity, Text } from 'react-native';
 import { LayoutDashboard, ShoppingBag, Calendar, BookOpenCheck, UserCircle, Settings, Bell } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Logo from '../../components/Logo';
@@ -11,14 +11,11 @@ export default function TabLayout() {
     const { colors, isDarkMode } = useTheme();
     const { unreadCount } = useNotifications();
     const insets = useSafeAreaInsets();
-    
-    // Calculate bottom padding: use safe area inset plus additional spacing
-    // On Android, add extra padding to separate from system navigation bar
-    const bottomPadding = Platform.OS === 'android' 
-        ? Math.max(insets.bottom, 20) + 25  // Extra 25px padding on Android
-        : Math.max(insets.bottom, 20) + 10; // Extra 10px padding on iOS
-    
-    const tabBarHeight = 70 + bottomPadding; // Base height + bottom padding
+    // Match system home indicator / nav bar only — avoid stacking extra padding with screen SafeAreaView.
+    const bottomInset = insets.bottom;
+    const tabBarPaddingTop = 6;
+    const tabBarRowMinHeight = 52;
+    const tabBarHeight = tabBarRowMinHeight + tabBarPaddingTop + bottomInset;
     
     return (
         <Tabs
@@ -29,8 +26,8 @@ export default function TabLayout() {
                     borderTopWidth: 1,
                     borderTopColor: colors.border,
                     height: tabBarHeight,
-                    paddingBottom: bottomPadding,
-                    paddingTop: 12,
+                    paddingBottom: bottomInset,
+                    paddingTop: tabBarPaddingTop,
                     backgroundColor: colors.background,
                     // Add elevation/shadow for better separation
                     elevation: 8,

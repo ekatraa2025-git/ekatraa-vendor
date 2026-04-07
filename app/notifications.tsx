@@ -26,6 +26,14 @@ export default function NotificationsScreen() {
         }
     };
 
+    const handleNotificationPress = async (notification: NotificationData) => {
+        await handleMarkAsRead(notification);
+        const orderId = notification.data?.order_id;
+        if (orderId) {
+            router.push({ pathname: '/orders/[id]', params: { id: String(orderId) } });
+        }
+    };
+
     const handleMarkAllAsRead = async () => {
         await markAllAsRead();
     };
@@ -129,7 +137,7 @@ export default function NotificationsScreen() {
                                 {unreadNotifications.map((notification) => (
                                     <TouchableOpacity
                                         key={notification.id}
-                                        onPress={() => handleMarkAsRead(notification)}
+                                        onPress={() => handleNotificationPress(notification)}
                                         activeOpacity={0.7}
                                         className="mb-3 p-4 rounded-2xl border-2"
                                         style={{
@@ -157,6 +165,31 @@ export default function NotificationsScreen() {
                                                         {formatDate(notification.created_at)}
                                                     </Text>
                                                 </View>
+                                                {(notification.data?.occasion_name || notification.data?.event_date || notification.data?.status) ? (
+                                                    <View className="flex-row flex-wrap mt-2 gap-2">
+                                                        {notification.data?.occasion_name ? (
+                                                            <View className="px-2 py-1 rounded-full" style={{ backgroundColor: colors.background }}>
+                                                                <Text className="text-[10px] font-semibold" style={{ color: colors.textSecondary }}>
+                                                                    {String(notification.data.occasion_name)}
+                                                                </Text>
+                                                            </View>
+                                                        ) : null}
+                                                        {notification.data?.event_date ? (
+                                                            <View className="px-2 py-1 rounded-full" style={{ backgroundColor: colors.background }}>
+                                                                <Text className="text-[10px] font-semibold" style={{ color: colors.textSecondary }}>
+                                                                    {new Date(String(notification.data.event_date)).toLocaleDateString()}
+                                                                </Text>
+                                                            </View>
+                                                        ) : null}
+                                                        {notification.data?.status ? (
+                                                            <View className="px-2 py-1 rounded-full" style={{ backgroundColor: colors.background }}>
+                                                                <Text className="text-[10px] font-semibold" style={{ color: colors.textSecondary }}>
+                                                                    {String(notification.data.status)}
+                                                                </Text>
+                                                            </View>
+                                                        ) : null}
+                                                    </View>
+                                                ) : null}
                                             </View>
                                         </View>
                                     </TouchableOpacity>
@@ -175,6 +208,7 @@ export default function NotificationsScreen() {
                                 {readNotifications.map((notification) => (
                                     <TouchableOpacity
                                         key={notification.id}
+                                        onPress={() => handleNotificationPress(notification)}
                                         activeOpacity={0.7}
                                         className="mb-3 p-4 rounded-2xl"
                                         style={{ backgroundColor: colors.surface }}
@@ -199,6 +233,31 @@ export default function NotificationsScreen() {
                                                         {formatDate(notification.created_at)}
                                                     </Text>
                                                 </View>
+                                                {(notification.data?.occasion_name || notification.data?.event_date || notification.data?.status) ? (
+                                                    <View className="flex-row flex-wrap mt-2 gap-2">
+                                                        {notification.data?.occasion_name ? (
+                                                            <View className="px-2 py-1 rounded-full" style={{ backgroundColor: colors.background }}>
+                                                                <Text className="text-[10px] font-semibold" style={{ color: colors.textSecondary }}>
+                                                                    {String(notification.data.occasion_name)}
+                                                                </Text>
+                                                            </View>
+                                                        ) : null}
+                                                        {notification.data?.event_date ? (
+                                                            <View className="px-2 py-1 rounded-full" style={{ backgroundColor: colors.background }}>
+                                                                <Text className="text-[10px] font-semibold" style={{ color: colors.textSecondary }}>
+                                                                    {new Date(String(notification.data.event_date)).toLocaleDateString()}
+                                                                </Text>
+                                                            </View>
+                                                        ) : null}
+                                                        {notification.data?.status ? (
+                                                            <View className="px-2 py-1 rounded-full" style={{ backgroundColor: colors.background }}>
+                                                                <Text className="text-[10px] font-semibold" style={{ color: colors.textSecondary }}>
+                                                                    {String(notification.data.status)}
+                                                                </Text>
+                                                            </View>
+                                                        ) : null}
+                                                    </View>
+                                                ) : null}
                                             </View>
                                         </View>
                                     </TouchableOpacity>

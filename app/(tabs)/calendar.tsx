@@ -198,17 +198,19 @@ export default function CalendarScreen() {
 
     if (loading) {
         return (
-            <SafeAreaView className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
+            <SafeAreaView edges={['left', 'right']} className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
                 <ActivityIndicator size="large" color="#FF6B00" />
             </SafeAreaView>
         );
     }
 
     return (
-        <SafeAreaView className="flex-1" style={{ backgroundColor: colors.background }}>
+        <SafeAreaView edges={['left', 'right']} className="flex-1" style={{ backgroundColor: colors.background }}>
             <View className="px-6 py-4">
-                <Text className="text-2xl font-bold" style={{ color: colors.text }}>Availability</Text>
-                <Text className="text-xs" style={{ color: colors.textSecondary }}>Manage your order calendar</Text>
+                <View className="rounded-3xl p-5" style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }}>
+                    <Text className="text-2xl font-bold" style={{ color: colors.text }}>Availability</Text>
+                    <Text className="text-xs mt-1" style={{ color: colors.textSecondary }}>Manage booking dates and service availability</Text>
+                </View>
             </View>
 
             <ScrollView className="flex-1">
@@ -274,7 +276,7 @@ export default function CalendarScreen() {
                             </View>
                         </View>
                     ) : (
-                        <TouchableOpacity className="rounded-3xl p-6 flex-row items-center mb-4" style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }}>
+                        <TouchableOpacity activeOpacity={0.9} className="rounded-3xl p-6 flex-row items-center mb-4" style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }}>
                             <View className="w-12 h-12 rounded-2xl items-center justify-center" style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }}>
                                 <Clock size={24} color="#FF6B00" />
                             </View>
@@ -314,7 +316,7 @@ export default function CalendarScreen() {
                     </TouchableOpacity>
 
                     {showServiceAvailability && (
-                        <View className="mt-3">
+                        <View className="mt-3 rounded-2xl p-3" style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }}>
                             {loadingAvailability ? (
                                 <View className="py-8 items-center">
                                     <ActivityIndicator size="small" color="#FF6B00" />
@@ -329,11 +331,11 @@ export default function CalendarScreen() {
                                 services.map((service: any) => {
                                     const isAvailable = serviceAvailability[service.id] !== false;
                                     return (
-                                        <View 
+                                        <View
                                             key={service.id}
                                             className="rounded-2xl p-4 mb-2 flex-row items-center justify-between"
                                             style={{ 
-                                                backgroundColor: colors.surface, 
+                                                backgroundColor: colors.background, 
                                                 borderWidth: 1, 
                                                 borderColor: isAvailable ? '#10B981' + '40' : colors.border
                                             }}

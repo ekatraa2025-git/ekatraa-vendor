@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type User } from '@supabase/supabase-js';
 import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import 'react-native-url-polyfill/auto';
@@ -102,6 +102,79 @@ try {
         storage: { from: () => ({ getPublicUrl: () => ({ data: { publicUrl: '' } }) }) },
         channel: () => ({ on: () => ({ subscribe: () => ({ unsubscribe: () => { } }) }) }),
     };
+}
+
+/** True when stored refresh token cannot be used (clear local session). */
+export function isInvalidRefreshTokenError(error: { message?: string; status?: number } | null | undefined): boolean {
+    if (!error) return false;
+    const m = (error.message || "").toLowerCase();
+    if (m.includes("refresh token") || m.includes("invalid refresh") || m.includes("refresh_token")) return true;
+    if (m.includes("jwt") && (m.includes("invalid") || m.includes("expired"))) return true;
+    return false;
+}
+
+/** Call after getSession/getUser/refreshSession returns a refresh/JWT error so the user can log in again. */
+export async function clearStaleAuthSession(): Promise<void> {
+    try {
+        await supabase.auth.signOut({ scope: "local" });
+    } catch {
+        /* ignore */
+    }
+}
+
+export async function recoverFromAuthStorageError(
+    error: { message?: string; status?: number } | null | undefined
+): Promise<boolean> {
+    if (!isInvalidRefreshTokenError(error)) return false;
+    await clearStaleAuthSession();
+    return true;
+}
+
+/**
+ * Resolve the current user for authenticated actions.
+ * Retries getSession briefly — after verifyOtp, SecureStore can lag behind the in-memory session.
+ * Prefer this over getUser() alone (server round-trip can return null transiently).
+ */
+export async function resolveSupabaseUser(): Promise<User | null> {
+    if (!supabaseUrl || !supabaseAnonKey) return null;
+
+    const SESSION_READ_RETRIES = 8;
+    const SESSION_READ_DELAY_MS = 100;
+
+    for (let attempt = 0; attempt < SESSION_READ_RETRIES; attempt++) {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        if (error && isInvalidRefreshTokenError(error)) {
+            await recoverFromAuthStorageError(error);
+            return null;
+        }
+        if (session?.user) return session.user;
+
+        await new Promise((r) => setTimeout(r, SESSION_READ_DELAY_MS));
+    }
+
+    try {
+        const { data, error } = await supabase.auth.refreshSession();
+        if (error && isInvalidRefreshTokenError(error)) {
+            await recoverFromAuthStorageError(error);
+            return null;
+        }
+        if (data?.session?.user) return data.session.user;
+    } catch {
+        /* ignore */
+    }
+
+    try {
+        const { data: { user }, error } = await supabase.auth.getUser();
+        if (error && isInvalidRefreshTokenError(error)) {
+            await recoverFromAuthStorageError(error);
+            return null;
+        }
+        if (user) return user;
+    } catch {
+        /* ignore */
+    }
+
+    return null;
 }
 
 export { supabase };

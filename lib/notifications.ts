@@ -90,6 +90,7 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
           importance: Notifications.AndroidImportance.MAX,
           vibrationPattern: [0, 250, 250, 250],
           lightColor: '#FF231F7C',
+          sound: 'default',
         });
       } catch (error) {
         // Android push notifications not available in Expo Go - this is expected
@@ -173,7 +174,7 @@ export function setupNotificationSubscription(
                 title: notification.title,
                 body: notification.message,
                 data: notification.data || {},
-                sound: true,
+                sound: 'default',
               },
               trigger: null, // Show immediately
             }).catch((error: unknown) => {

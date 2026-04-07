@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { setupNotificationSubscription, fetchNotifications, markNotificationAsRead, markAllNotificationsAsRead, NotificationData } from '../lib/notifications';
 import { supabase } from '../lib/supabase';
+import { notificationToastVariant, useToast } from './ToastContext';
 
 interface NotificationContextType {
   notifications: NotificationData[];
@@ -14,6 +15,7 @@ interface NotificationContextType {
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
 
 export function NotificationProvider({ children, vendorId }: { children: React.ReactNode; vendorId: string | null }) {
+  const { showToast } = useToast();
   const [notifications, setNotifications] = useState<NotificationData[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -49,10 +51,16 @@ export function NotificationProvider({ children, vendorId }: { children: React.R
     const unsubscribe = setupNotificationSubscription(vendorId, (notification) => {
       console.log('[NotificationContext] New notification received:', notification);
       setNotifications((prev) => [notification, ...prev]);
+      showToast({
+        variant: notificationToastVariant(notification.type),
+        title: notification.title || 'Notification',
+        message: notification.message,
+        duration: 4500,
+      });
     });
 
     return unsubscribe;
-  }, [vendorId]);
+  }, [vendorId, showToast]);
 
   const handleMarkAsRead = async (id: string) => {
     await markNotificationAsRead(id);

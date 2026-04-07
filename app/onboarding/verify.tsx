@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, Image, KeyboardAvoidingView, Platform, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, Image, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Shield, ChevronLeft, Camera, Check, Upload, Info, CheckCircle2, CreditCard } from 'lucide-react-native';
@@ -9,6 +9,7 @@ import Constants from 'expo-constants';
 import { supabase } from '../../lib/supabase';
 import { resolveStorageImageUrl } from '../../lib/storageImageUrl';
 import { useTheme } from '../../context/ThemeContext';
+import { useToast } from '../../context/ToastContext';
 
 // Helper function to get the correct API URL based on platform
 const getApiUrl = () => {
@@ -33,6 +34,7 @@ const getApiUrl = () => {
 export default function VerificationScreen() {
     const router = useRouter();
     const { colors, isDarkMode } = useTheme();
+    const { showToast, showAcknowledge } = useToast();
     const [aadhaar, setAadhaar] = useState('');
     const [aadhaarFront, setAadhaarFront] = useState<string | null>(null);
     const [aadhaarBack, setAadhaarBack] = useState<string | null>(null);
@@ -115,13 +117,13 @@ export default function VerificationScreen() {
         if (source === 'camera') {
             const { status } = await ImagePicker.requestCameraPermissionsAsync();
             if (status !== 'granted') {
-                Alert.alert('Permission Required', 'Camera permission is required to take photos.');
+                showToast({ variant: 'warning', title: 'Permission required', message: 'Camera permission is required to take photos.' });
                 return;
             }
         } else {
             const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
             if (status !== 'granted') {
-                Alert.alert('Permission Required', 'Media library permission is required to select photos.');
+                showToast({ variant: 'warning', title: 'Permission required', message: 'Media library permission is required to select photos.' });
                 return;
             }
         }
@@ -209,11 +211,11 @@ export default function VerificationScreen() {
 
     const handleGenerateOTP = async () => {
         if (aadhaar.length !== 12) {
-            Alert.alert('Invalid Aadhaar', 'Please enter a valid 12-digit Aadhaar number.');
+            showToast({ variant: 'warning', title: 'Invalid Aadhaar', message: 'Please enter a valid 12-digit Aadhaar number.' });
             return;
         }
         if (!aadhaarFront || !aadhaarBack) {
-            Alert.alert('Documents Required', 'Please upload photos of both sides of your Aadhaar card.');
+            showToast({ variant: 'warning', title: 'Documents required', message: 'Please upload photos of both sides of your Aadhaar card.' });
             return;
         }
 
@@ -271,7 +273,7 @@ export default function VerificationScreen() {
             if (data.data && data.data.reference_id) {
                 setReferenceId(data.data.reference_id);
                 setOtpSent(true);
-                Alert.alert('OTP Sent', 'OTP has been sent to your registered mobile number. Please enter it to verify.');
+                showToast({ variant: 'success', title: 'OTP sent', message: 'OTP has been sent to your registered mobile number. Please enter it to verify.' });
             } else {
                 throw new Error(data.message || 'Failed to generate OTP');
             }
@@ -281,17 +283,16 @@ export default function VerificationScreen() {
             
             // Check for network errors
             if (error.message?.includes('Network request failed') || error.message?.includes('Failed to fetch')) {
-                Alert.alert(
-                    'Network Error',
-                    'Unable to connect to the server. Please check:\n\n1. Backend server is running\n2. Correct API URL is configured\n3. Device/emulator can reach the server',
-                    [{ text: 'OK' }]
-                );
+                showAcknowledge({
+                    title: 'Network error',
+                    message:
+                        'Unable to connect to the server. Please check:\n\n1. Backend server is running\n2. Correct API URL is configured\n3. Device/emulator can reach the server',
+                });
             } else if (error.message?.includes('Forbidden') || error.message?.includes('403')) {
-                // More specific error message for 403
                 errorMessage = 'Access denied. Please check your API credentials or contact support.';
-                Alert.alert('Authentication Error', errorMessage);
+                showToast({ variant: 'error', title: 'Authentication error', message: errorMessage });
             } else {
-                Alert.alert('Error', errorMessage);
+                showToast({ variant: 'error', title: 'Could not send OTP', message: errorMessage });
             }
         } finally {
             setLoading(false);
@@ -302,20 +303,20 @@ export default function VerificationScreen() {
         // Validate OTP format
         const otpTrimmed = otp?.trim() || '';
         if (!otpTrimmed || otpTrimmed.length !== 6 || !/^\d{6}$/.test(otpTrimmed)) {
-            Alert.alert('Invalid OTP', 'Please enter a valid 6-digit numeric OTP.');
+            showToast({ variant: 'warning', title: 'Invalid OTP', message: 'Please enter a valid 6-digit numeric OTP.' });
             return;
         }
 
         // Check referenceId exists and is valid
         if (!referenceId) {
-            Alert.alert('Error', 'Reference ID not found. Please generate OTP again.');
+            showToast({ variant: 'error', title: 'Reference missing', message: 'Reference ID not found. Please generate OTP again.' });
             return;
         }
         
         // Convert referenceId to string
         const referenceIdStr = String(referenceId).trim();
         if (referenceIdStr === '') {
-            Alert.alert('Error', 'Reference ID is invalid. Please generate OTP again.');
+            showToast({ variant: 'error', title: 'Reference invalid', message: 'Reference ID is invalid. Please generate OTP again.' });
             return;
         }
 
@@ -428,19 +429,13 @@ export default function VerificationScreen() {
                     console.warn('[OTP Verify] Could not refresh vendor data:', refreshError);
                 }
 
-                Alert.alert(
-                    'Verification Successful',
-                    data.warning 
+                showAcknowledge({
+                    title: 'Verification successful',
+                    message: data.warning
                         ? `${data.message}\n\n${data.warning}`
                         : 'Your Aadhaar has been verified successfully. You are now a verified vendor.',
-                    [{ 
-                        text: 'OK', 
-                        onPress: () => {
-                            // Navigate back to profile/onboarding screen
-                            router.back();
-                        }
-                    }]
-                );
+                    onPress: () => router.back(),
+                });
             } else {
                 // If verification failed, show the error
                 const errorMsg = data.error || data.message || 'Verification failed';
@@ -452,17 +447,16 @@ export default function VerificationScreen() {
             
             // Check for network errors
             if (error.message?.includes('Network request failed') || error.message?.includes('Failed to fetch')) {
-                Alert.alert(
-                    'Network Error',
-                    'Unable to connect to the server. Please check:\n\n1. Backend server is running\n2. Correct API URL is configured\n3. Device/emulator can reach the server',
-                    [{ text: 'OK' }]
-                );
+                showAcknowledge({
+                    title: 'Network error',
+                    message:
+                        'Unable to connect to the server. Please check:\n\n1. Backend server is running\n2. Correct API URL is configured\n3. Device/emulator can reach the server',
+                });
             } else if (error.message?.includes('Forbidden') || error.message?.includes('403')) {
-                // More specific error message for 403
                 errorMessage = 'Access denied. Please check your API credentials or contact support.';
-                Alert.alert('Authentication Error', errorMessage);
+                showToast({ variant: 'error', title: 'Authentication error', message: errorMessage });
             } else {
-                Alert.alert('Verification Failed', errorMessage);
+                showToast({ variant: 'error', title: 'Verification failed', message: errorMessage });
             }
         } finally {
             setVerifying(false);

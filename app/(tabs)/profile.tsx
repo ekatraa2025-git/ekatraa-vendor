@@ -1,13 +1,14 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Image, ActivityIndicator, Alert, Modal, TextInput, Linking, Platform, KeyboardAvoidingView, FlatList } from 'react-native';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, Image, ActivityIndicator, Modal, TextInput, Linking, Platform, KeyboardAvoidingView, FlatList } from 'react-native';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { User, Shield, CreditCard, Bell, HelpCircle, LogOut, ChevronRight, Settings, Check, X, Languages, Phone as PhoneIcon, Mail, ImagePlus } from 'lucide-react-native';
+import { User, Shield, CreditCard, Bell, HelpCircle, LogOut, ChevronRight, Settings, Check, X, Languages, Phone as PhoneIcon, Mail, ImagePlus, MapPin } from 'lucide-react-native';
 import QuickHelp from '../../components/QuickHelp';
 import { supabase } from '../../lib/supabase';
 import { resolveStorageImageUrl } from '../../lib/storageImageUrl';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../../context/ThemeContext';
+import { useToast } from '../../context/ToastContext';
 import { refreshTranslations } from '../../lib/i18n';
 import { readAsStringAsync } from 'expo-file-system/legacy';
 
@@ -24,6 +25,7 @@ export default function ProfileScreen() {
     const { openPayout } = useLocalSearchParams();
     const { t, i18n } = useTranslation();
     const { colors, isDarkMode } = useTheme();
+    const { showToast, showConfirm } = useToast();
     const [loading, setLoading] = useState(true);
     const [vendor, setVendor] = useState<any>(null);
     const [updating, setUpdating] = useState(false);
@@ -31,6 +33,7 @@ export default function ProfileScreen() {
     const [logoUrl, setLogoUrl] = useState<string>('');
     const [galleryUrls, setGalleryUrls] = useState<string[]>([]);
     const [gallerySigned, setGallerySigned] = useState<Record<string, string>>({});
+    const visibleGalleryRefs = useRef<string[]>([]);
 
     // Modals
     const [payoutModal, setPayoutModal] = useState(false);
@@ -40,8 +43,8 @@ export default function ProfileScreen() {
 
     // Support contact details
     const supportContacts = {
-        phones: ['+91 9876543210', '+91 1234567890'],
-        emails: ['support@ekatraa.com', 'help@ekatraa.com']
+        phones: ['+91 84229 48781'],
+        emails: ['support@ekatraa.in'],
     };
 
     // Temporary state for editing
@@ -84,7 +87,7 @@ export default function ProfileScreen() {
 
             if (error) throw error;
             if (!data) {
-                router.replace('/onboarding');
+                router.replace({ pathname: '/onboarding' });
                 return;
             }
 
@@ -93,15 +96,7 @@ export default function ProfileScreen() {
 
             const gUrls = Array.isArray(data.gallery_urls) ? data.gallery_urls.filter(Boolean) : [];
             setGalleryUrls(gUrls);
-            const signedMap: Record<string, string> = {};
-            for (const ref of gUrls.slice(0, 12)) {
-                try {
-                    signedMap[ref] = await getImageUrl(ref);
-                } catch {
-                    signedMap[ref] = ref;
-                }
-            }
-            setGallerySigned(signedMap);
+            setGallerySigned({});
 
             // Load signed URL for logo if it exists
             if (data.logo_url && !data.logo_url.startsWith('file') && !data.logo_url.startsWith('content')) {
@@ -137,7 +132,7 @@ export default function ProfileScreen() {
     const handleUpdateProfile = async (closeModal: () => void) => {
         const validationError = validateFinancialData();
         if (validationError) {
-            Alert.alert('Validation Error', validationError);
+            showToast({ variant: 'warning', title: 'Validation error', message: validationError });
             return;
         }
         try {
@@ -160,9 +155,9 @@ export default function ProfileScreen() {
             if (error) throw error;
             setVendor({ ...vendor, ...editData });
             closeModal();
-            Alert.alert('Success', 'Profile updated successfully');
+            showToast({ variant: 'success', title: 'Profile updated', message: 'Your changes were saved.' });
         } catch (error: any) {
-            Alert.alert('Error', error.message || 'Failed to update profile');
+            showToast({ variant: 'error', title: 'Could not update', message: error.message || 'Failed to update profile' });
         } finally {
             setUpdating(false);
         }
@@ -280,9 +275,9 @@ export default function ProfileScreen() {
             // Update logo URL with signed URL
             const signedUrl = await getImageUrl(fileName);
             setLogoUrl(signedUrl);
-            Alert.alert('Success', 'Profile photo updated successfully');
+            showToast({ variant: 'success', title: 'Photo updated', message: 'Profile photo updated successfully.' });
         } catch (error: any) {
-            Alert.alert('Error', error.message || 'Failed to update profile photo');
+            showToast({ variant: 'error', title: 'Could not update photo', message: error.message || 'Failed to update profile photo' });
         } finally {
             setUpdating(false);
         }
@@ -300,62 +295,107 @@ export default function ProfileScreen() {
         setGalleryUrls(next);
     };
 
+    const resolveVisibleGallery = useCallback(async (refs: string[]) => {
+        if (!refs.length) return;
+        const pending = refs.filter((ref) => ref && !gallerySigned[ref]);
+        if (!pending.length) return;
+        const resolved = await Promise.all(
+            pending.map(async (ref) => {
+                try {
+                    const signed = await getImageUrl(ref);
+                    return [ref, signed] as const;
+                } catch {
+                    return [ref, ref] as const;
+                }
+            })
+        );
+        setGallerySigned((prev) => {
+            const next = { ...prev };
+            for (const [ref, signed] of resolved) {
+                if (!next[ref]) next[ref] = signed;
+            }
+            return next;
+        });
+    }, [gallerySigned]);
+
+    const handleGalleryViewableItemsChanged = useCallback(
+        ({ viewableItems }: { viewableItems: Array<{ item: string }> }) => {
+            const refs = viewableItems
+                .map((v) => v.item)
+                .filter((item): item is string => !!item && item !== '__add__');
+            visibleGalleryRefs.current = refs;
+            resolveVisibleGallery(refs);
+        },
+        [resolveVisibleGallery]
+    );
+
     const handleAddGalleryImage = async () => {
         if (galleryUrls.length >= 12) {
-            Alert.alert('Limit', 'You can add up to 12 gallery photos.');
+            showToast({ variant: 'warning', title: 'Limit reached', message: 'You can add up to 12 gallery photos.' });
             return;
         }
+        const remaining = Math.max(0, 12 - galleryUrls.length);
         const result = await ImagePicker.launchImageLibraryAsync({
             mediaTypes: 'images',
-            allowsEditing: true,
-            aspect: [4, 3],
+            allowsEditing: false,
+            allowsMultipleSelection: true,
+            selectionLimit: remaining,
             quality: 0.85,
         });
         if (result.canceled) return;
         try {
             setUpdating(true);
-            const fileName = await uploadImage(result.assets[0].uri, 'gallery');
-            const next = [...galleryUrls, fileName];
+            const picked = Array.isArray(result.assets) ? result.assets : [];
+            if (!picked.length) return;
+            const uploadTargets = picked.slice(0, remaining);
+            const uploaded: string[] = [];
+            for (const asset of uploadTargets) {
+                const fileName = await uploadImage(asset.uri, 'gallery');
+                if (fileName) uploaded.push(fileName);
+            }
+            const next = [...galleryUrls, ...uploaded].slice(0, 12);
             await persistGallery(next);
-            const signed = await getImageUrl(fileName);
-            setGallerySigned((prev) => ({ ...prev, [fileName]: signed }));
-            Alert.alert('Success', 'Photo added to gallery');
+            resolveVisibleGallery(visibleGalleryRefs.current);
+            showToast({
+                variant: 'success',
+                title: 'Photos added',
+                message: `${uploaded.length} photo${uploaded.length === 1 ? '' : 's'} added to gallery.`,
+            });
         } catch (e: any) {
-            Alert.alert('Error', e?.message || 'Could not add photo');
+            showToast({ variant: 'error', title: 'Could not add photos', message: e?.message || 'Could not add photo' });
         } finally {
             setUpdating(false);
         }
     };
 
     const handleRemoveGalleryImage = (ref: string) => {
-        Alert.alert('Remove photo', 'Remove this image from your gallery?', [
-            { text: 'Cancel', style: 'cancel' },
-            {
-                text: 'Remove',
-                style: 'destructive',
-                onPress: async () => {
-                    try {
-                        setUpdating(true);
-                        const next = galleryUrls.filter((u) => u !== ref);
-                        await persistGallery(next);
-                        setGallerySigned((prev) => {
-                            const n = { ...prev };
-                            delete n[ref];
-                            return n;
-                        });
-                    } catch (e: any) {
-                        Alert.alert('Error', e?.message || 'Could not remove');
-                    } finally {
-                        setUpdating(false);
-                    }
-                },
+        showConfirm({
+            title: 'Remove photo',
+            message: 'Remove this image from your gallery?',
+            confirmLabel: 'Remove',
+            destructive: true,
+            onConfirm: async () => {
+                try {
+                    setUpdating(true);
+                    const next = galleryUrls.filter((u) => u !== ref);
+                    await persistGallery(next);
+                    setGallerySigned((prev) => {
+                        const n = { ...prev };
+                        delete n[ref];
+                        return n;
+                    });
+                } catch (e: any) {
+                    showToast({ variant: 'error', title: 'Could not remove', message: e?.message || 'Could not remove' });
+                } finally {
+                    setUpdating(false);
+                }
             },
-        ]);
+        });
     };
 
     if (loading) {
         return (
-            <SafeAreaView className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
+            <SafeAreaView edges={['left', 'right']} className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
                 <ActivityIndicator size="large" color="#FF6B00" />
             </SafeAreaView>
         );
@@ -365,15 +405,15 @@ export default function ProfileScreen() {
         {
             icon: User,
             label: 'Business Profile',
-            subtitle: 'Company details and logo',
-            onPress: () => router.push('/onboarding')
+            subtitle: 'Company details, logo, and location',
+            onPress: () => router.push({ pathname: '/onboarding', params: { step: '1' } })
         },
         {
             icon: Shield,
             label: 'Identity Verification',
             subtitle: 'KYC and documents',
             badge: vendor?.is_verified === true ? 'Verified' : 'Pending',
-            onPress: () => router.push('/onboarding/verify')
+            onPress: () => router.push({ pathname: '/onboarding/verify' })
         },
         {
             icon: CreditCard,
@@ -431,7 +471,7 @@ export default function ProfileScreen() {
     );
 
     return (
-        <SafeAreaView className="flex-1" style={{ backgroundColor: colors.background }}>
+        <SafeAreaView edges={['left', 'right']} className="flex-1" style={{ backgroundColor: colors.background }}>
             <ScrollView className="flex-1 px-6">
                 <View className="items-center py-10">
                     <View className="relative">
@@ -485,6 +525,30 @@ export default function ProfileScreen() {
                     onAction={() => console.log('View Walkthrough')}
                 />
 
+                <View className="mb-6 rounded-3xl p-5 border" style={{ backgroundColor: colors.surface, borderColor: colors.border }}>
+                    <View className="flex-row items-center justify-between mb-3">
+                        <Text className="text-lg font-bold" style={{ color: colors.text }}>Service location</Text>
+                        <TouchableOpacity
+                            onPress={() => router.push({ pathname: '/onboarding', params: { step: '2' } })}
+                            className="flex-row items-center px-3 py-2 rounded-full"
+                            style={{
+                                backgroundColor: `${colors.primary}22`,
+                                borderWidth: 1,
+                                borderColor: `${colors.primary}55`,
+                            }}
+                        >
+                            <MapPin size={16} color={colors.primary} strokeWidth={2.5} />
+                            <Text className="text-xs font-bold ml-1.5" style={{ color: colors.primary }}>Map & address</Text>
+                        </TouchableOpacity>
+                    </View>
+                    <View className="flex-row items-start">
+                        <MapPin size={20} color={colors.textSecondary} style={{ marginRight: 10, marginTop: 2 }} />
+                        <Text className="flex-1 text-sm leading-5" style={{ color: vendor?.address ? colors.text : colors.textSecondary }}>
+                            {vendor?.address?.trim() ? vendor.address : 'No address set yet. Pin your location on the map in onboarding.'}
+                        </Text>
+                    </View>
+                </View>
+
                 <View className="mb-6 px-0">
                     <Text className="text-lg font-bold mb-2" style={{ color: colors.text }}>Gallery</Text>
                     <Text className="text-xs mb-3" style={{ color: colors.textSecondary }}>
@@ -495,6 +559,8 @@ export default function ProfileScreen() {
                         data={[...galleryUrls, '__add__']}
                         keyExtractor={(item, i) => (item === '__add__' ? 'add' : `${item}-${i}`)}
                         showsHorizontalScrollIndicator={false}
+                        onViewableItemsChanged={handleGalleryViewableItemsChanged}
+                        viewabilityConfig={{ itemVisiblePercentThreshold: 30 }}
                         renderItem={({ item }) => {
                             if (item === '__add__') {
                                 return (
@@ -512,7 +578,13 @@ export default function ProfileScreen() {
                             const uri = gallerySigned[item] || item;
                             return (
                                 <View className="mr-3 relative">
-                                    <Image source={{ uri }} className="w-28 h-28 rounded-2xl" style={{ backgroundColor: colors.surface }} />
+                                    {gallerySigned[item] ? (
+                                        <Image source={{ uri }} className="w-28 h-28 rounded-2xl" style={{ backgroundColor: colors.surface }} />
+                                    ) : (
+                                        <View className="w-28 h-28 rounded-2xl items-center justify-center" style={{ backgroundColor: colors.surface }}>
+                                            <ActivityIndicator size="small" color={colors.primary} />
+                                        </View>
+                                    )}
                                     <TouchableOpacity
                                         onPress={() => handleRemoveGalleryImage(item)}
                                         className="absolute -top-1 -right-1 w-7 h-7 rounded-full bg-red-500 items-center justify-center"

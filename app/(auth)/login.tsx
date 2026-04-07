@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator } from 'react-native';
+import { Picker } from '@react-native-picker/picker';
 import VendorTermsModal from '../../components/VendorTermsModal';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -7,6 +8,15 @@ import { Phone, ArrowRight } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
 import Logo from '../../components/Logo';
 import { useTheme } from '../../context/ThemeContext';
+import { useToast } from '../../context/ToastContext';
+import { useTranslation } from 'react-i18next';
+import '../../lib/i18n';
+
+const LANGUAGES: { code: string; label: string }[] = [
+    { code: 'en', label: 'English' },
+    { code: 'hi', label: 'हिन्दी' },
+    { code: 'or', label: 'ଓଡିଆ' },
+];
 
 export default function LoginScreen() {
     const [phone, setPhone] = useState('');
@@ -14,10 +24,12 @@ export default function LoginScreen() {
     const [vendorTermsVisible, setVendorTermsVisible] = useState(false);
     const router = useRouter();
     const { colors } = useTheme();
+    const { showToast } = useToast();
+    const { t, i18n } = useTranslation();
 
     const handleSendOTP = async () => {
         if (!phone || phone.length !== 10) {
-            Alert.alert('Invalid Phone', 'Please enter a valid 10-digit mobile number.');
+            showToast({ variant: 'warning', title: 'Invalid phone', message: 'Please enter a valid 10-digit mobile number.' });
             return;
         }
 
@@ -30,17 +42,16 @@ export default function LoginScreen() {
             });
 
             if (error) {
-                Alert.alert('Error', error.message);
+                showToast({ variant: 'error', title: 'Could not send code', message: error.message });
                 return;
             }
 
-            // Navigate to OTP screen with phone number
             router.push({
                 pathname: '/(auth)/otp',
                 params: { phone }
             });
         } catch (error: any) {
-            Alert.alert('Error', 'Something went wrong. Please try again.');
+            showToast({ variant: 'error', title: 'Something went wrong', message: 'Please try again.' });
         } finally {
             setLoading(false);
         }
@@ -73,6 +84,25 @@ export default function LoginScreen() {
                         </View>
 
                         <View className="p-6 rounded-3xl shadow-sm" style={{ backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1 }}>
+                            <Text className="text-sm font-semibold mb-2 uppercase tracking-wider" style={{ color: colors.textSecondary }}>
+                                {t('select_language')}
+                            </Text>
+                            <View
+                                className="rounded-2xl mb-6 overflow-hidden"
+                                style={{ backgroundColor: colors.background, borderColor: colors.border, borderWidth: 1 }}
+                            >
+                                <Picker
+                                    selectedValue={i18n.language?.split('-')[0] || 'en'}
+                                    onValueChange={(itemValue) => i18n.changeLanguage(itemValue)}
+                                    style={{ color: colors.text }}
+                                    dropdownIconColor={colors.textSecondary}
+                                >
+                                    {LANGUAGES.map((lang) => (
+                                        <Picker.Item key={lang.code} label={lang.label} value={lang.code} />
+                                    ))}
+                                </Picker>
+                            </View>
+
                             <Text className="text-sm font-semibold mb-4 uppercase tracking-wider" style={{ color: colors.textSecondary }}>
                                 Mobile Number
                             </Text>
@@ -123,9 +153,6 @@ export default function LoginScreen() {
                             >
                                 <Text className="text-primary font-semibold text-sm">Vendor Terms & Conditions</Text>
                             </TouchableOpacity>
-                            <Text className="text-xs mt-1 text-center" style={{ color: colors.textSecondary }}>
-                                (same as at app start)
-                            </Text>
                         </View>
                     </View>
                 </ScrollView>

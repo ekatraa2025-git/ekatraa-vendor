@@ -1,22 +1,29 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, FlatList, Modal, TextInput, Alert, Image, KeyboardAvoidingView, Platform, RefreshControl, Share } from 'react-native';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import { View, Text, TouchableOpacity, ActivityIndicator, FlatList, Modal, TextInput, Image, KeyboardAvoidingView, Platform, RefreshControl, Share } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Calendar, MapPin, Check, X, MessageSquare, ReceiptText, UploadCloud, Play } from 'lucide-react-native';
+import { Calendar, MapPin, Check, X, MessageSquare, ReceiptText, UploadCloud, Play, Trash2, EyeOff, RotateCcw } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
 import { useTheme } from '../../context/ThemeContext';
-import { useFocusEffect } from 'expo-router';
+import { useToast } from '../../context/ToastContext';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { fetchVendorOrders, submitVendorQuotation, requestOrderCompletion, confirmOrderCompletion, requestOrderStart, confirmOrderStart } from '../../lib/vendor-api';
 import * as ImagePicker from 'expo-image-picker';
 import { readAsStringAsync } from 'expo-file-system/legacy';
 import DateTimePickerModal from 'react-native-modal-datetime-picker';
+import { getVendorOrderStatusBadge, getVendorOrderBadgeColors } from '../../lib/orderStatusDisplay';
+import { loadHiddenOrderIds, saveHiddenOrderIds } from '../../lib/hiddenCompletedOrders';
 
 export default function OrdersScreen() {
+    const router = useRouter();
     const { colors, isDarkMode } = useTheme();
+    const { showToast } = useToast();
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const [lastSyncAt, setLastSyncAt] = useState<Date | null>(null);
     const [orders, setOrders] = useState<any[]>([]);
     const [vendor, setVendor] = useState<any>(null);
     const [filter, setFilter] = useState('all');
+    const [dateFilter, setDateFilter] = useState<'upcoming' | 'today' | '7d' | '30d' | 'all'>('all');
     const [detailModalVisible, setDetailModalVisible] = useState(false);
     const [selectedOrder, setSelectedOrder] = useState<any>(null);
     const [quotationModalVisible, setQuotationModalVisible] = useState(false);
@@ -28,6 +35,7 @@ export default function OrdersScreen() {
     const [quotationDate, setQuotationDate] = useState(new Date());
     const [deliveryDate, setDeliveryDate] = useState(new Date());
     const [validUntil, setValidUntil] = useState(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
+    const [quotationStep, setQuotationStep] = useState<1 | 2 | 3>(1);
 
     const [completionModalVisible, setCompletionModalVisible] = useState(false);
     const [completionOrder, setCompletionOrder] = useState<any>(null);
@@ -62,9 +70,14 @@ export default function OrdersScreen() {
         paymentTerms: [],
     });
 
+    const [hiddenOrderIds, setHiddenOrderIds] = useState<Set<string>>(new Set());
+
     useEffect(() => {
-        fetchOrders();
         fetchVendor();
+    }, []);
+
+    useEffect(() => {
+        loadHiddenOrderIds().then(setHiddenOrderIds);
     }, []);
 
     useFocusEffect(
@@ -94,7 +107,7 @@ export default function OrdersScreen() {
             const { data, error } = await fetchVendorOrders(apiFilter);
             if (error) {
                 console.warn('[Orders] Fetch error:', error);
-                Alert.alert('Error', error);
+                showToast({ variant: 'error', title: 'Could not load orders', message: error });
                 setOrders([]);
             } else {
                 let list = data || [];
@@ -104,6 +117,7 @@ export default function OrdersScreen() {
                     );
                 }
                 setOrders(list);
+                setLastSyncAt(new Date());
             }
         } catch (error: any) {
             console.error('Error fetching orders:', error);
@@ -112,10 +126,6 @@ export default function OrdersScreen() {
             setLoading(false);
         }
     };
-
-    useEffect(() => {
-        fetchOrders();
-    }, [filter]);
 
     const pickImage = async (field: string) => {
         const result = await ImagePicker.launchImageLibraryAsync({
@@ -169,12 +179,12 @@ export default function OrdersScreen() {
 
     const handleSubmitQuotation = async () => {
         if (!quotationOrder || !quotationForm.amount || !quotationForm.venueAddress) {
-            Alert.alert('Missing Info', 'Please fill in Amount and Venue Address');
+            showToast({ variant: 'warning', title: 'Missing info', message: 'Please fill in amount and venue address.' });
             return;
         }
 
         if (!quotationForm.vendorTcAccepted) {
-            Alert.alert('Terms Required', 'Please accept the terms and conditions to proceed');
+            showToast({ variant: 'warning', title: 'Terms required', message: 'Please accept the terms and conditions to proceed.' });
             return;
         }
 
@@ -216,14 +226,15 @@ export default function OrdersScreen() {
 
             if (error) throw new Error(error);
 
-            Alert.alert('Success', 'Quotation submitted successfully! It will appear in the customer\'s order details.', [
-                { text: 'OK', onPress: () => {
-                    setQuotationModalVisible(false);
-                    fetchOrders();
-                }},
-            ]);
+            setQuotationModalVisible(false);
+            fetchOrders();
+            showToast({
+                variant: 'success',
+                title: 'Quotation submitted',
+                message: 'It will appear in the customer\'s order details.',
+            });
         } catch (error: any) {
-            Alert.alert('Error', error.message || 'Failed to submit quotation');
+            showToast({ variant: 'error', title: 'Could not submit', message: error.message || 'Failed to submit quotation' });
         } finally {
             setSavingQuotation(false);
         }
@@ -231,7 +242,7 @@ export default function OrdersScreen() {
 
     const generateReceipt = async (order: any) => {
         if (!order || !vendor) {
-            Alert.alert('Error', 'Order or vendor data not available.');
+            showToast({ variant: 'error', title: 'Missing data', message: 'Order or vendor data not available.' });
             return;
         }
 
@@ -272,7 +283,7 @@ Thank you for choosing Ekatraa!
         `.trim();
 
         await Share.share({ message: receiptContent, title: `Receipt_${receiptId}.txt` });
-        Alert.alert('Success', 'Receipt generated! You can save it from the share menu.');
+        showToast({ variant: 'success', title: 'Receipt ready', message: 'You can save it from the share menu.' });
     };
 
     const handleRequestStart = async (order: any) => {
@@ -284,7 +295,7 @@ Thank you for choosing Ekatraa!
         const { error } = await requestOrderStart(order.id);
         setStartLoading(false);
         if (error) {
-            Alert.alert('Error', error);
+            showToast({ variant: 'error', title: 'Could not request start', message: error });
             setStartModalVisible(false);
         } else {
             setStartStep('enter_otp');
@@ -293,16 +304,20 @@ Thank you for choosing Ekatraa!
 
     const handleConfirmStart = async () => {
         if (!startOrder || !startOtp.trim()) {
-            Alert.alert('Enter OTP', 'Please enter the OTP received from the customer.');
+            showToast({ variant: 'warning', title: 'Enter OTP', message: 'Please enter the OTP received from the customer.' });
             return;
         }
         setStartLoading(true);
         const { error } = await confirmOrderStart(startOrder.id, startOtp.trim());
         setStartLoading(false);
         if (error) {
-            Alert.alert('Error', error);
+            showToast({ variant: 'error', title: 'Could not confirm', message: error });
         } else {
-            Alert.alert('Success', 'Work started. You can request completion OTP when the service is done.');
+            showToast({
+                variant: 'success',
+                title: 'Work started',
+                message: 'You can request completion OTP when the service is done.',
+            });
             setStartModalVisible(false);
             setStartOrder(null);
             setStartOtp('');
@@ -319,7 +334,7 @@ Thank you for choosing Ekatraa!
         const { error } = await requestOrderCompletion(order.id);
         setCompletionLoading(false);
         if (error) {
-            Alert.alert('Error', error);
+            showToast({ variant: 'error', title: 'Could not request completion', message: error });
             setCompletionModalVisible(false);
         } else {
             setCompletionStep('enter_otp');
@@ -328,16 +343,16 @@ Thank you for choosing Ekatraa!
 
     const handleConfirmCompletion = async () => {
         if (!completionOrder || !completionOtp.trim()) {
-            Alert.alert('Enter OTP', 'Please enter the OTP received from the customer.');
+            showToast({ variant: 'warning', title: 'Enter OTP', message: 'Please enter the OTP received from the customer.' });
             return;
         }
         setCompletionLoading(true);
         const { error } = await confirmOrderCompletion(completionOrder.id, completionOtp.trim());
         setCompletionLoading(false);
         if (error) {
-            Alert.alert('Error', error);
+            showToast({ variant: 'error', title: 'Could not complete', message: error });
         } else {
-            Alert.alert('Success', 'Order marked as completed.');
+            showToast({ variant: 'success', title: 'Order completed', message: 'Order marked as completed.' });
             setCompletionModalVisible(false);
             setCompletionOrder(null);
             setCompletionOtp('');
@@ -350,7 +365,78 @@ Thank you for choosing Ekatraa!
         return order.quotations?.length > 0 || order.quotation_submitted;
     };
 
-    const filteredOrders = orders;
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const endOfToday = new Date(startOfToday);
+    endOfToday.setHours(23, 59, 59, 999);
+    const daysFromToday = (n: number) => {
+        const d = new Date(startOfToday);
+        d.setDate(d.getDate() + n);
+        d.setHours(23, 59, 59, 999);
+        return d;
+    };
+
+    const ordersForDateFilter = useMemo(
+        () =>
+            (orders || [])
+                .filter((o: any) => {
+                    const raw = o?.event_date;
+                    const dt = raw ? new Date(raw) : null;
+                    if (!dt || Number.isNaN(dt.getTime())) return dateFilter === 'all';
+                    if (dateFilter === 'all') return true;
+                    if (dateFilter === 'upcoming') return dt >= startOfToday;
+                    if (dateFilter === 'today') return dt >= startOfToday && dt <= endOfToday;
+                    if (dateFilter === '7d') return dt >= startOfToday && dt <= daysFromToday(7);
+                    if (dateFilter === '30d') return dt >= startOfToday && dt <= daysFromToday(30);
+                    return true;
+                })
+                .sort((a: any, b: any) => {
+                    const ad = a?.event_date ? new Date(a.event_date).getTime() : Number.MAX_SAFE_INTEGER;
+                    const bd = b?.event_date ? new Date(b.event_date).getTime() : Number.MAX_SAFE_INTEGER;
+                    return ad - bd;
+                }),
+        [orders, dateFilter, startOfToday, endOfToday]
+    );
+
+    const filteredOrders = useMemo(
+        () => ordersForDateFilter.filter((o: any) => !hiddenOrderIds.has(o.id)),
+        [ordersForDateFilter, hiddenOrderIds]
+    );
+
+    const hideOrderFromList = useCallback((orderId: string) => {
+        setHiddenOrderIds((prev) => {
+            const next = new Set(prev);
+            next.add(orderId);
+            saveHiddenOrderIds(next);
+            return next;
+        });
+        showToast({ variant: 'info', title: 'Removed from list', message: 'You can restore hidden orders anytime.' });
+    }, [showToast]);
+
+    const hideAllCompletedFromList = useCallback(() => {
+        const completed = (orders || []).filter((o: any) => String(o?.status || '').toLowerCase() === 'completed');
+        if (completed.length === 0) {
+            showToast({ variant: 'info', title: 'No completed orders', message: 'There are no completed orders to hide.' });
+            return;
+        }
+        setHiddenOrderIds((prev) => {
+            const next = new Set(prev);
+            completed.forEach((o: any) => next.add(o.id));
+            saveHiddenOrderIds(next);
+            return next;
+        });
+        showToast({
+            variant: 'success',
+            title: 'Completed orders cleared',
+            message: `${completed.length} order(s) removed from your list.`,
+        });
+    }, [orders, showToast]);
+
+    const restoreHiddenOrders = useCallback(() => {
+        setHiddenOrderIds(new Set());
+        saveHiddenOrderIds(new Set());
+        showToast({ variant: 'success', title: 'List restored', message: 'All hidden orders are visible again.' });
+    }, [showToast]);
 
     const formatOrderId = (id: string | undefined) => {
         if (!id) return '';
@@ -361,13 +447,12 @@ Thank you for choosing Ekatraa!
         const items = item.items || [];
         const firstItemName = items[0]?.name || 'Service';
         const submitted = hasQuotation(item);
+        const statusBadge = getVendorOrderStatusBadge(item);
+        const statusColors = getVendorOrderBadgeColors(statusBadge.kind, item.status, isDarkMode);
+        const isCompleted = String(item.status || '').toLowerCase() === 'completed';
 
         return (
-            <TouchableOpacity
-                onPress={() => {
-                    setSelectedOrder(item);
-                    setDetailModalVisible(true);
-                }}
+            <View
                 className="rounded-[32px] p-6 mb-6 shadow-sm"
                 style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }}
             >
@@ -376,19 +461,32 @@ Thank you for choosing Ekatraa!
                         <Text className="text-[10px] uppercase font-bold tracking-widest" style={{ color: colors.textSecondary }}>{formatOrderId(item.id)} • {firstItemName}</Text>
                         <Text className="text-xl font-bold mt-1" numberOfLines={1} style={{ color: colors.text }}>{item.contact_name || 'Customer'}</Text>
                     </View>
-                    <View className="px-3 py-1 rounded-full" style={{
-                        backgroundColor: submitted ? (isDarkMode ? '#064E3B' : '#D1FAE5') :
-                            item.status === 'pending' ? (isDarkMode ? '#7C2D12' : '#FED7AA') :
-                                item.status === 'completed' ? (isDarkMode ? '#1E3A8A' : '#DBEAFE') : (isDarkMode ? '#374151' : '#F3F4F6'),
-                    }}>
-                        <Text className="text-[10px] font-bold uppercase" style={{
-                            color: submitted ? (isDarkMode ? '#6EE7B7' : '#059669') :
-                                item.status === 'pending' ? (isDarkMode ? '#FBBF24' : '#D97706') :
-                                    item.status === 'completed' ? (isDarkMode ? '#93C5FD' : '#2563EB') : (isDarkMode ? '#9CA3AF' : '#4B5563'),
-                        }}>{submitted ? 'Quotation Sent' : item.status || 'Pending'}</Text>
+                    <View className="flex-row items-center" style={{ gap: 8 }}>
+                        {isCompleted ? (
+                            <TouchableOpacity
+                                onPress={() => hideOrderFromList(item.id)}
+                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                className="p-1 rounded-full"
+                                style={{ backgroundColor: colors.background }}
+                                accessibilityLabel="Remove completed order from list"
+                            >
+                                <Trash2 size={18} color={colors.textSecondary} />
+                            </TouchableOpacity>
+                        ) : null}
+                        <View className="px-3 py-1 rounded-full" style={{ backgroundColor: statusColors.bg }}>
+                            <Text className="text-[10px] font-bold uppercase" style={{ color: statusColors.fg }}>
+                                {statusBadge.label}
+                            </Text>
+                        </View>
                     </View>
                 </View>
 
+                <TouchableOpacity
+                    activeOpacity={0.88}
+                    onPress={() => {
+                        router.push({ pathname: '/orders/[id]', params: { id: item.id } });
+                    }}
+                >
                 <View className="space-y-3">
                     <View className="flex-row items-center">
                         <Calendar size={16} color={colors.textSecondary} />
@@ -450,6 +548,7 @@ Thank you for choosing Ekatraa!
                                 setQuotationDate(new Date());
                                 setDeliveryDate(item.event_date ? new Date(item.event_date) : new Date());
                                 setValidUntil(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
+                                setQuotationStep(1);
                                 setQuotationModalVisible(true);
                             }}
                             className="flex-1 flex-row items-center justify-center py-3 rounded-2xl"
@@ -491,23 +590,31 @@ Thank you for choosing Ekatraa!
                         <Text className="font-bold ml-2" style={{ color: colors.primary }}>Generate Receipt</Text>
                     </TouchableOpacity>
                 )}
-            </TouchableOpacity>
+                </TouchableOpacity>
+            </View>
         );
     };
 
-    if (loading) {
+    if (loading && orders.length === 0) {
         return (
-            <SafeAreaView className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
+            <SafeAreaView edges={['left', 'right']} className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
                 <ActivityIndicator size="large" color={colors.primary} />
             </SafeAreaView>
         );
     }
 
     return (
-        <SafeAreaView className="flex-1" style={{ backgroundColor: colors.background }}>
+        <SafeAreaView edges={['left', 'right']} className="flex-1" style={{ backgroundColor: colors.background }}>
             <View className="px-6 py-4">
-                <Text className="text-2xl font-bold" style={{ color: colors.text }}>Orders</Text>
-                <Text className="text-xs" style={{ color: colors.textSecondary }}>Orders allocated to you — submit quotations</Text>
+                <View className="rounded-3xl p-5" style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }}>
+                    <Text className="text-2xl font-bold" style={{ color: colors.text }}>Orders</Text>
+                    <Text className="text-xs mt-1" style={{ color: colors.textSecondary }}>Allocated orders, milestones, quotation actions</Text>
+                    {lastSyncAt ? (
+                        <Text className="text-[11px] mt-2" style={{ color: colors.textSecondary }}>
+                            Last sync at {lastSyncAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                        </Text>
+                    ) : null}
+                </View>
             </View>
 
             <View className="px-6 mb-6 flex-row gap-3">
@@ -526,21 +633,126 @@ Thank you for choosing Ekatraa!
                 ))}
             </View>
 
+            <View className="px-6 mb-2">
+                <FlatList
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    data={[
+                        { id: 'all', label: 'All Dates' },
+                        { id: 'upcoming', label: 'Upcoming' },
+                        { id: 'today', label: 'Today' },
+                        { id: '7d', label: 'Next 7 Days' },
+                        { id: '30d', label: 'Next 30 Days' },
+                    ]}
+                    keyExtractor={(i) => i.id}
+                    renderItem={({ item }) => {
+                        const active = dateFilter === (item.id as typeof dateFilter);
+                        return (
+                            <TouchableOpacity
+                                onPress={() => setDateFilter(item.id as typeof dateFilter)}
+                                className="px-4 py-2 rounded-full mr-2"
+                                style={{
+                                    backgroundColor: active ? colors.primary + '22' : colors.surface,
+                                    borderWidth: 1,
+                                    borderColor: active ? colors.primary : colors.border,
+                                }}
+                            >
+                                <Text style={{ color: active ? colors.primary : colors.text, fontWeight: '700', fontSize: 12 }}>
+                                    {item.label}
+                                </Text>
+                            </TouchableOpacity>
+                        );
+                    }}
+                />
+            </View>
+
+            <View className="px-6 mb-3 flex-row flex-wrap" style={{ gap: 10 }}>
+                <TouchableOpacity
+                    onPress={hideAllCompletedFromList}
+                    className="flex-row items-center px-3 py-2 rounded-full border"
+                    style={{ borderColor: colors.border, backgroundColor: colors.surface }}
+                >
+                    <EyeOff size={16} color={colors.textSecondary} />
+                    <Text className="text-xs font-bold ml-2" style={{ color: colors.text }}>
+                        Hide all completed
+                    </Text>
+                </TouchableOpacity>
+                {hiddenOrderIds.size > 0 ? (
+                    <TouchableOpacity
+                        onPress={restoreHiddenOrders}
+                        className="flex-row items-center px-3 py-2 rounded-full border"
+                        style={{ borderColor: colors.primary + '66', backgroundColor: colors.primary + '14' }}
+                    >
+                        <RotateCcw size={16} color={colors.primary} />
+                        <Text className="text-xs font-bold ml-2" style={{ color: colors.primary }}>
+                            Restore hidden ({hiddenOrderIds.size})
+                        </Text>
+                    </TouchableOpacity>
+                ) : null}
+            </View>
+
+            {loading && orders.length > 0 ? (
+                <View className="px-6 pb-2">
+                    <View className="rounded-xl px-3 py-2 flex-row items-center" style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }}>
+                        <ActivityIndicator size="small" color={colors.primary} />
+                        <Text className="text-xs ml-2" style={{ color: colors.textSecondary }}>Refreshing orders...</Text>
+                    </View>
+                </View>
+            ) : null}
+
             <FlatList
                 data={filteredOrders}
                 renderItem={renderOrderCard}
                 keyExtractor={(item) => item.id}
-                contentContainerStyle={{ padding: 24 }}
+                contentContainerStyle={{ padding: 24, paddingBottom: 120 }}
                 showsVerticalScrollIndicator={false}
+                initialNumToRender={8}
+                maxToRenderPerBatch={8}
+                windowSize={7}
+                removeClippedSubviews
                 refreshControl={
                     <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} tintColor={colors.primary} />
                 }
-                ListEmptyComponent={() => (
-                    <View className="flex-1 items-center justify-center py-20">
-                        <Text className="font-medium" style={{ color: colors.textSecondary }}>No {filter === 'active' ? 'active' : filter} orders</Text>
-                        <Text className="text-xs mt-2 text-center px-8" style={{ color: colors.textSecondary }}>Orders will appear here when admin allocates them to you</Text>
-                    </View>
-                )}
+                ListEmptyComponent={() => {
+                    if (orders.length === 0) {
+                        return (
+                            <View className="flex-1 items-center justify-center py-20">
+                                <Text className="font-medium" style={{ color: colors.textSecondary }}>No {filter === 'active' ? 'active' : filter} orders</Text>
+                                <Text className="text-xs mt-2 text-center px-8" style={{ color: colors.textSecondary }}>Orders will appear here when admin allocates them to you</Text>
+                            </View>
+                        );
+                    }
+                    if (ordersForDateFilter.length === 0) {
+                        return (
+                            <View className="flex-1 items-center justify-center py-20 px-6">
+                                <Text className="font-medium text-center" style={{ color: colors.textSecondary }}>No orders match this date range</Text>
+                                <Text className="text-xs mt-2 text-center" style={{ color: colors.textSecondary }}>Try &quot;All Dates&quot; or another filter.</Text>
+                            </View>
+                        );
+                    }
+                    if (hiddenOrderIds.size > 0) {
+                        return (
+                            <View className="flex-1 items-center justify-center py-20 px-6">
+                                <Text className="font-medium text-center" style={{ color: colors.textSecondary }}>All matching orders are hidden</Text>
+                                <Text className="text-xs mt-2 text-center" style={{ color: colors.textSecondary }}>You removed completed orders from the list. Restore to show them again.</Text>
+                                <TouchableOpacity
+                                    onPress={restoreHiddenOrders}
+                                    className="mt-4 px-4 py-3 rounded-2xl flex-row items-center"
+                                    style={{ backgroundColor: colors.primary }}
+                                >
+                                    <RotateCcw size={18} color={colors.background} />
+                                    <Text className="font-bold ml-2" style={{ color: colors.background }}>Restore hidden orders</Text>
+                                </TouchableOpacity>
+                            </View>
+                        );
+                    }
+                    return (
+                        <View className="flex-1 items-center justify-center py-20">
+                            <Text className="font-medium" style={{ color: colors.textSecondary }}>No {filter === 'active' ? 'active' : filter} orders</Text>
+                            <Text className="text-xs mt-2 text-center px-8" style={{ color: colors.textSecondary }}>Orders will appear here when admin allocates them to you</Text>
+                        </View>
+                    );
+                }}
             />
 
             <Modal animationType="slide" transparent visible={detailModalVisible} onRequestClose={() => setDetailModalVisible(false)}>
@@ -651,6 +863,7 @@ Thank you for choosing Ekatraa!
                                     setQuotationDate(new Date());
                                     setDeliveryDate(selectedOrder?.event_date ? new Date(selectedOrder.event_date) : new Date());
                                     setValidUntil(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
+                                    setQuotationStep(1);
                                     setQuotationModalVisible(true);
                                 }}
                                 className="mt-10 bg-primary py-5 rounded-2xl items-center"
@@ -663,59 +876,74 @@ Thank you for choosing Ekatraa!
             </Modal>
 
             {/* Quotation Form Modal */}
-            <Modal animationType="slide" transparent visible={quotationModalVisible} onRequestClose={() => setQuotationModalVisible(false)}>
-                <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} className="flex-1">
-                    <View className="flex-1 justify-end bg-black/50">
-                        <View className="rounded-t-[40px] max-h-[90%]" style={{ backgroundColor: colors.surface }}>
-                            <FlatList
-                                data={[1]}
-                                keyExtractor={() => 'form'}
-                                renderItem={() => (
-                                    <>
-                                        <View className="p-6">
-                                            <View className="flex-row justify-between items-center mb-6">
-                                                <Text className="text-2xl font-bold" style={{ color: colors.text }}>Submit Quotation</Text>
-                                                <TouchableOpacity onPress={() => setQuotationModalVisible(false)}>
-                                                    <X size={24} color={colors.textSecondary} />
-                                                </TouchableOpacity>
-                                            </View>
+            <Modal animationType="slide" visible={quotationModalVisible} onRequestClose={() => setQuotationModalVisible(false)}>
+                <SafeAreaView className="flex-1" style={{ backgroundColor: colors.surface }}>
+                    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} className="flex-1">
+                        <View className="px-6 py-4 flex-row items-center justify-between border-b" style={{ borderBottomColor: colors.border, borderBottomWidth: 1 }}>
+                            <View>
+                                <Text className="text-2xl font-bold" style={{ color: colors.text }}>Submit Quotation</Text>
+                                <Text className="text-xs mt-1" style={{ color: colors.textSecondary }}>
+                                    Step {quotationStep} of 3
+                                </Text>
+                            </View>
+                            <TouchableOpacity onPress={() => setQuotationModalVisible(false)}>
+                                <X size={24} color={colors.textSecondary} />
+                            </TouchableOpacity>
+                        </View>
 
-                                            <View className="mb-6 p-4 rounded-2xl" style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }}>
-                                                <Text className="text-sm font-bold" style={{ color: colors.text }}>Order Pricing Details</Text>
+                        <View className="px-6 py-3 flex-row gap-2">
+                            {[1, 2, 3].map((s) => (
+                                <View key={s} className="flex-1 h-2 rounded-full" style={{ backgroundColor: quotationStep >= s ? colors.primary : colors.border }} />
+                            ))}
+                        </View>
+
+                        <FlatList
+                            data={[1]}
+                            keyExtractor={() => 'quotation-step-form'}
+                            contentContainerStyle={{ padding: 24, paddingBottom: 120 }}
+                            renderItem={() => (
+                                <>
+                                    {quotationStep === 1 ? (
+                                        <>
+                                            <View className="mb-5 p-4 rounded-2xl" style={{ backgroundColor: colors.primary + '12', borderWidth: 1, borderColor: colors.primary + '40' }}>
+                                                <Text className="text-sm font-bold" style={{ color: colors.text }}>Order Snapshot</Text>
                                                 <Text className="text-xs mt-2" style={{ color: colors.textSecondary }}>
                                                     Service: {quotationForm.serviceName || quotationOrder?.items?.[0]?.name || 'Order Service'}
                                                 </Text>
                                                 <Text className="text-xs mt-1" style={{ color: colors.textSecondary }}>
-                                                    Total Order Price: ₹{Number(quotationOrder?.total_order_price || quotationOrder?.total_amount || 0).toLocaleString()}
+                                                    Occasion: {quotationOrder?.occasion_name || quotationOrder?.event_name || '—'}
                                                 </Text>
                                                 <Text className="text-xs mt-1" style={{ color: colors.textSecondary }}>
-                                                    Advance Paid: ₹{Number(quotationOrder?.advance_paid || quotationOrder?.advance_amount || 0).toLocaleString()}
+                                                    Date: {quotationOrder?.event_date ? new Date(quotationOrder.event_date).toLocaleDateString() : '—'}
+                                                </Text>
+                                                <Text className="text-xs mt-1" style={{ color: colors.textSecondary }}>
+                                                    Total: ₹{Number(quotationOrder?.total_order_price || quotationOrder?.total_amount || 0).toLocaleString()}
                                                 </Text>
                                             </View>
 
-                                            <View className="mb-6">
+                                            <View className="mb-5">
                                                 <Text className="text-sm font-bold mb-2" style={{ color: colors.text }}>Amount (₹) *</Text>
-                                                <View className="flex-row items-center rounded-2xl px-5 py-4" style={{ backgroundColor: colors.background, borderWidth: 2, borderColor: colors.border }}>
+                                                <View className="flex-row items-center rounded-2xl px-5 py-4" style={{ backgroundColor: colors.background, borderWidth: 2, borderColor: colors.primary + '55' }}>
                                                     <Text className="font-extrabold text-xl mr-3" style={{ color: colors.text }}>₹</Text>
                                                     <TextInput
                                                         placeholder="Enter amount"
                                                         placeholderTextColor={colors.textSecondary}
                                                         keyboardType="number-pad"
                                                         value={quotationForm.amount}
-                                                        onChangeText={(t) => setQuotationForm(prev => ({ ...prev, amount: t }))}
+                                                        onChangeText={(t) => setQuotationForm((prev) => ({ ...prev, amount: t }))}
                                                         className="flex-1 font-extrabold text-xl"
                                                         style={{ color: colors.text }}
                                                     />
                                                 </View>
                                             </View>
 
-                                            <View className="mb-6">
+                                            <View className="mb-5">
                                                 <Text className="text-sm font-bold mb-2" style={{ color: colors.text }}>Venue Address *</Text>
                                                 <TextInput
                                                     placeholder="Enter venue address"
                                                     placeholderTextColor={colors.textSecondary}
                                                     value={quotationForm.venueAddress}
-                                                    onChangeText={(t) => setQuotationForm(prev => ({ ...prev, venueAddress: t }))}
+                                                    onChangeText={(t) => setQuotationForm((prev) => ({ ...prev, venueAddress: t }))}
                                                     multiline
                                                     numberOfLines={3}
                                                     className="rounded-2xl px-5 py-4 font-medium"
@@ -723,53 +951,37 @@ Thank you for choosing Ekatraa!
                                                 />
                                             </View>
 
-                                            <View className="mb-6">
-                                                <Text className="text-sm font-bold mb-2" style={{ color: colors.text }}>Quotation Submission Date</Text>
-                                                <TouchableOpacity
-                                                    onPress={() => setQuotationDateVisible(true)}
-                                                    className="rounded-2xl px-5 py-4"
-                                                    style={{ backgroundColor: colors.background, borderWidth: 2, borderColor: colors.border }}
-                                                >
-                                                    <Text style={{ color: colors.text }}>{quotationDate.toLocaleString()}</Text>
-                                                </TouchableOpacity>
-                                            </View>
+                                            {[
+                                                { label: 'Quotation Submission Date', value: quotationDate.toLocaleString(), onPress: () => setQuotationDateVisible(true) },
+                                                { label: 'Confirmation Date', value: deliveryDate.toLocaleString(), onPress: () => setDeliveryDateVisible(true) },
+                                                { label: 'Valid Until', value: validUntil.toLocaleString(), onPress: () => setValidUntilVisible(true) },
+                                            ].map((r) => (
+                                                <View key={r.label} className="mb-5">
+                                                    <Text className="text-sm font-bold mb-2" style={{ color: colors.text }}>{r.label}</Text>
+                                                    <TouchableOpacity onPress={r.onPress} className="rounded-2xl px-5 py-4" style={{ backgroundColor: colors.background, borderWidth: 2, borderColor: colors.border }}>
+                                                        <Text style={{ color: colors.text }}>{r.value}</Text>
+                                                    </TouchableOpacity>
+                                                </View>
+                                            ))}
+                                        </>
+                                    ) : null}
 
-                                            <View className="mb-6">
-                                                <Text className="text-sm font-bold mb-2" style={{ color: colors.text }}>Confirmation Date</Text>
-                                                <TouchableOpacity
-                                                    onPress={() => setDeliveryDateVisible(true)}
-                                                    className="rounded-2xl px-5 py-4"
-                                                    style={{ backgroundColor: colors.background, borderWidth: 2, borderColor: colors.border }}
-                                                >
-                                                    <Text style={{ color: colors.text }}>{deliveryDate.toLocaleString()}</Text>
-                                                </TouchableOpacity>
-                                            </View>
-
-                                            <View className="mb-6">
-                                                <Text className="text-sm font-bold mb-2" style={{ color: colors.text }}>Valid Until</Text>
-                                                <TouchableOpacity
-                                                    onPress={() => setValidUntilVisible(true)}
-                                                    className="rounded-2xl px-5 py-4"
-                                                    style={{ backgroundColor: colors.background, borderWidth: 2, borderColor: colors.border }}
-                                                >
-                                                    <Text style={{ color: colors.text }}>{validUntil.toLocaleString()}</Text>
-                                                </TouchableOpacity>
-                                            </View>
-
-                                            {(['specifications', 'quantityRequirements', 'qualityStandards', 'deliveryTerms', 'paymentTerms'] as const).map((field) => (
+                                    {quotationStep === 2 ? (
+                                        <>
+                                            {(['specifications', 'quantityRequirements', 'qualityStandards'] as const).map((field) => (
                                                 <View key={field} className="mb-6">
                                                     <Text className="text-sm font-bold mb-2" style={{ color: colors.text }}>
-                                                        {field.replace(/([A-Z])/g, ' $1').trim().replace(/^./, (s) => s.toUpperCase())} (optional)
+                                                        {field.replace(/([A-Z])/g, ' $1').trim().replace(/^./, (s) => s.toUpperCase())}
                                                     </Text>
                                                     <TextInput
-                                                        placeholder={field === 'specifications' ? 'Service specifications' : field === 'quantityRequirements' ? 'Quantity requirements' : field === 'qualityStandards' ? 'Quality standards' : field === 'deliveryTerms' ? 'Delivery terms' : 'Payment terms'}
+                                                        placeholder="Add details..."
                                                         placeholderTextColor={colors.textSecondary}
                                                         value={quotationForm[field]}
-                                                        onChangeText={(t) => setQuotationForm(prev => ({ ...prev, [field]: t }))}
+                                                        onChangeText={(t) => setQuotationForm((prev) => ({ ...prev, [field]: t }))}
                                                         multiline
-                                                        numberOfLines={2}
+                                                        numberOfLines={3}
                                                         className="rounded-2xl px-5 py-4 font-medium"
-                                                        style={{ backgroundColor: colors.background, borderWidth: 2, borderColor: colors.border, color: colors.text, textAlignVertical: 'top', minHeight: 60 }}
+                                                        style={{ backgroundColor: colors.background, borderWidth: 2, borderColor: colors.border, color: colors.text, textAlignVertical: 'top', minHeight: 90 }}
                                                     />
                                                     <View className="flex-row flex-wrap mt-2 items-center">
                                                         <TouchableOpacity
@@ -784,7 +996,7 @@ Thank you for choosing Ekatraa!
                                                             <View key={idx} className="relative mr-2 mb-2">
                                                                 <Image source={{ uri }} style={{ width: 56, height: 56, borderRadius: 8 }} resizeMode="cover" />
                                                                 <TouchableOpacity
-                                                                    onPress={() => setQuotationAttachments(prev => ({
+                                                                    onPress={() => setQuotationAttachments((prev) => ({
                                                                         ...prev,
                                                                         [field]: prev[field].filter((_, i) => i !== idx),
                                                                     }))}
@@ -798,34 +1010,86 @@ Thank you for choosing Ekatraa!
                                                     </View>
                                                 </View>
                                             ))}
+                                        </>
+                                    ) : null}
 
-                                            <View className="mb-6">
-                                                <TouchableOpacity
-                                                    onPress={() => setQuotationForm(prev => ({ ...prev, vendorTcAccepted: !prev.vendorTcAccepted }))}
-                                                    className="flex-row items-center"
-                                                >
+                                    {quotationStep === 3 ? (
+                                        <>
+                                            {(['deliveryTerms', 'paymentTerms'] as const).map((field) => (
+                                                <View key={field} className="mb-6">
+                                                    <Text className="text-sm font-bold mb-2" style={{ color: colors.text }}>
+                                                        {field === 'deliveryTerms' ? 'Delivery Terms' : 'Payment Terms'}
+                                                    </Text>
+                                                    <TextInput
+                                                        placeholder="Add details..."
+                                                        placeholderTextColor={colors.textSecondary}
+                                                        value={quotationForm[field]}
+                                                        onChangeText={(t) => setQuotationForm((prev) => ({ ...prev, [field]: t }))}
+                                                        multiline
+                                                        numberOfLines={3}
+                                                        className="rounded-2xl px-5 py-4 font-medium"
+                                                        style={{ backgroundColor: colors.background, borderWidth: 2, borderColor: colors.border, color: colors.text, textAlignVertical: 'top', minHeight: 90 }}
+                                                    />
+                                                    <View className="flex-row flex-wrap mt-2 items-center">
+                                                        <TouchableOpacity
+                                                            onPress={() => pickImage(field)}
+                                                            className="flex-row items-center py-2 px-4 rounded-xl mr-2 mb-2"
+                                                            style={{ backgroundColor: colors.primary + '20', borderWidth: 1, borderColor: colors.primary }}
+                                                        >
+                                                            <UploadCloud size={16} color={colors.primary} />
+                                                            <Text className="font-semibold ml-2 text-sm" style={{ color: colors.primary }}>Add Images</Text>
+                                                        </TouchableOpacity>
+                                                    </View>
+                                                </View>
+                                            ))}
+
+                                            <View className="mb-6 p-4 rounded-2xl" style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }}>
+                                                <TouchableOpacity onPress={() => setQuotationForm((prev) => ({ ...prev, vendorTcAccepted: !prev.vendorTcAccepted }))} className="flex-row items-center">
                                                     <View className={`w-6 h-6 rounded border-2 mr-3 items-center justify-center ${quotationForm.vendorTcAccepted ? 'bg-primary border-primary' : ''}`} style={{ borderColor: quotationForm.vendorTcAccepted ? colors.primary : colors.border }}>
                                                         {quotationForm.vendorTcAccepted && <Check size={16} color="white" />}
                                                     </View>
-                                                    <Text className="text-sm font-bold flex-1" style={{ color: colors.text }}>I accept the Terms and Conditions</Text>
+                                                    <Text className="text-sm font-bold flex-1" style={{ color: colors.text }}>
+                                                        I accept the Terms and Conditions
+                                                    </Text>
                                                 </TouchableOpacity>
                                             </View>
+                                        </>
+                                    ) : null}
+                                </>
+                            )}
+                        />
 
-                                            <TouchableOpacity
-                                                onPress={handleSubmitQuotation}
-                                                disabled={savingQuotation}
-                                                className={`py-5 rounded-2xl items-center mb-6 ${savingQuotation ? 'opacity-50' : ''}`}
-                                                style={{ backgroundColor: colors.primary }}
-                                            >
-                                                {savingQuotation ? <ActivityIndicator color="white" /> : <Text className="text-white font-bold text-lg">Submit Quotation</Text>}
-                                            </TouchableOpacity>
-                                        </View>
-                                    </>
-                                )}
-                            />
+                        <View className="px-6 py-4 border-t flex-row items-center" style={{ borderTopColor: colors.border }}>
+                            {quotationStep > 1 ? (
+                                <TouchableOpacity
+                                    onPress={() => setQuotationStep((s) => (s === 1 ? 1 : ((s - 1) as 1 | 2 | 3)))}
+                                    className="px-5 py-3 rounded-xl mr-3"
+                                    style={{ backgroundColor: colors.background }}
+                                >
+                                    <Text className="font-bold" style={{ color: colors.text }}>Back</Text>
+                                </TouchableOpacity>
+                            ) : null}
+                            {quotationStep < 3 ? (
+                                <TouchableOpacity
+                                    onPress={() => setQuotationStep((s) => (s === 3 ? 3 : ((s + 1) as 1 | 2 | 3)))}
+                                    className="flex-1 py-4 rounded-2xl items-center"
+                                    style={{ backgroundColor: colors.primary }}
+                                >
+                                    <Text className="text-white font-bold">Next</Text>
+                                </TouchableOpacity>
+                            ) : (
+                                <TouchableOpacity
+                                    onPress={handleSubmitQuotation}
+                                    disabled={savingQuotation}
+                                    className="flex-1 py-4 rounded-2xl items-center"
+                                    style={{ backgroundColor: colors.primary, opacity: savingQuotation ? 0.6 : 1 }}
+                                >
+                                    {savingQuotation ? <ActivityIndicator color="white" /> : <Text className="text-white font-bold text-lg">Submit Quotation</Text>}
+                                </TouchableOpacity>
+                            )}
                         </View>
-                    </View>
-                </KeyboardAvoidingView>
+                    </KeyboardAvoidingView>
+                </SafeAreaView>
             </Modal>
 
             {/* Start work OTP Modal */}

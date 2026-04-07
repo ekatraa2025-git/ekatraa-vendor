@@ -2,11 +2,17 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import React, { Component, ErrorInfo, ReactNode, useEffect, useState } from "react";
-import { View, Text, TouchableOpacity, AppState, AppStateStatus } from "react-native";
+import { View, Text, TouchableOpacity, AppState, AppStateStatus, LogBox } from "react-native";
+
+/** Dev Client / Expo Go sometimes rejects keep-awake; harmless. Avoid red-box noise. */
+if (__DEV__) {
+    LogBox.ignoreLogs(["Unable to activate keep awake", "keep awake"]);
+}
 import { ThemeProvider, useTheme } from "../context/ThemeContext";
+import { ToastProvider } from "../context/ToastContext";
 import { NotificationProvider } from "../context/NotificationContext";
 import { registerForPushNotificationsAsync } from "../lib/notifications";
-import { supabase } from "../lib/supabase";
+import { recoverFromAuthStorageError, supabase } from "../lib/supabase";
 import { loadTranslationsFromBackend, refreshTranslations } from "../lib/i18n";
 
 import "../global.css";
@@ -84,10 +90,12 @@ function AppContent() {
 
         // Get current user/vendor ID with timeout
         const getUserTimeout = setTimeout(() => {
-            supabase.auth.getUser().then(({ data: { user } }: { data: { user: any } }) => {
-                if (user) {
-                    setVendorId(user.id);
+            supabase.auth.getUser().then(({ data: { user }, error }: { data: { user: any }; error: any }) => {
+                if (error) {
+                    recoverFromAuthStorageError(error).catch(() => {});
+                    return;
                 }
+                if (user) setVendorId(user.id);
             }).catch((err: unknown) => {
                 console.warn('Get user failed:', err);
             });
@@ -100,8 +108,7 @@ function AppContent() {
                 if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') {
                     if (session?.user) setVendorId(session.user.id);
                 } else if (event === 'SIGNED_OUT' || event === 'TOKEN_REFRESH_FAILED') {
-                    // Clear stale token and reset vendor state
-                    supabase.auth.signOut().catch(() => {});
+                    supabase.auth.signOut({ scope: 'local' }).catch(() => {});
                     setVendorId(null);
                 } else if (session?.user) {
                     setVendorId(session.user.id);
@@ -159,9 +166,11 @@ function AppContent() {
                     <Stack.Screen name="index" />
                     <Stack.Screen name="(auth)/login" />
                     <Stack.Screen name="(auth)/otp" />
+                    {/* File routes: app/onboarding/index.tsx → "onboarding/index", not "onboarding" */}
                     <Stack.Screen name="onboarding/index" />
                     <Stack.Screen name="onboarding/verify" />
                     <Stack.Screen name="(tabs)" />
+                    <Stack.Screen name="orders/[id]" />
                     <Stack.Screen name="settings" />
                     <Stack.Screen name="notifications" />
                 </Stack>
@@ -174,9 +183,11 @@ export default function RootLayout() {
     return (
         <ErrorBoundary>
             <ThemeProvider>
-                <TermsAcceptanceGate>
-                    <AppContent />
-                </TermsAcceptanceGate>
+                <ToastProvider>
+                    <TermsAcceptanceGate>
+                        <AppContent />
+                    </TermsAcceptanceGate>
+                </ToastProvider>
             </ThemeProvider>
         </ErrorBoundary>
     );

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Image, ActivityIndicator, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { TrendingUp, Users, CalendarDays, Wallet, ChevronRight, FileText } from 'lucide-react-native';
+import { CalendarDays, ChevronRight, LayoutGrid, Sparkles, Store, User } from 'lucide-react-native';
 import QuickHelp from '../../components/QuickHelp';
 import { supabase } from '../../lib/supabase';
 import { fetchVendorOrders } from '../../lib/vendor-api';
@@ -16,12 +16,6 @@ export default function DashboardScreen() {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [vendor, setVendor] = useState<any>(null);
-    const [hasNotifications, setHasNotifications] = useState(true); // Mock status
-    const [stats, setStats] = useState([
-        { label: t('expected_revenue'), value: '₹0', icon: Wallet, color: '#FF6B00' },
-        { label: t('active_orders'), value: '0', icon: CalendarDays, color: '#3B82F6' },
-        { label: t('total_services'), value: '0', icon: TrendingUp, color: '#10B981' },
-    ]);
     const [upcomingBooking, setUpcomingBooking] = useState<any>(null);
 
     useEffect(() => {
@@ -54,12 +48,6 @@ export default function DashboardScreen() {
 
             if (vendorData) {
                 setVendor(vendorData);
-
-                // Fetch Services Count
-                const { count: serviceCount } = await supabase
-                    .from('services')
-                    .select('*', { count: 'exact', head: true })
-                    .eq('vendor_id', user.id);
 
                 // Calculate Expected Revenue (sum of all quotations)
                 const { data: allQuotations } = await supabase
@@ -100,20 +88,11 @@ export default function DashboardScreen() {
 
                 // Fetch orders from backend (allocated orders)
                 const { data: backendOrders } = await fetchVendorOrders();
-                const activeOrders = (backendOrders || []).filter((o: any) =>
-                    ['confirmed', 'pending', 'allocated'].includes(o.status || '')
-                );
                 const today = new Date().toISOString().split('T')[0];
                 const upcomingList = (backendOrders || [])
                     .filter((o: any) => o.event_date && o.event_date >= today && ['confirmed', 'pending', 'allocated'].includes(o.status || ''))
                     .sort((a: any, b: any) => (a.event_date || '').localeCompare(b.event_date || ''));
                 const upcomingOrder = upcomingList[0] || null;
-
-                setStats([
-                    { label: t('expected_revenue'), value: `₹${Math.floor(expectedRevenue)}`, icon: Wallet, color: '#FF7A00' },
-                    { label: t('active_orders'), value: activeOrders.length.toString(), icon: CalendarDays, color: '#3B82F6' },
-                    { label: t('total_services'), value: (serviceCount || 0).toString(), icon: TrendingUp, color: '#10B981' },
-                ]);
 
                 setUpcomingBooking(upcomingOrder || null);
             }
@@ -126,14 +105,14 @@ export default function DashboardScreen() {
 
     if (loading) {
         return (
-            <SafeAreaView className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
+            <SafeAreaView edges={['left', 'right']} className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
                 <ActivityIndicator size="large" color={colors.primary} />
             </SafeAreaView>
         );
     }
 
     return (
-        <SafeAreaView className="flex-1" style={{ backgroundColor: colors.background }}>
+        <SafeAreaView edges={['left', 'right']} className="flex-1" style={{ backgroundColor: colors.background }}>
             <ScrollView 
                 className="px-6 py-4"
                 refreshControl={
@@ -178,31 +157,31 @@ export default function DashboardScreen() {
                 </View>
 
                 <Text className="text-xl font-bold mb-4" style={{ color: colors.text }}>{t('quick_actions')}</Text>
-                <View className="flex-row flex-wrap justify-between">
-                    <TouchableOpacity
-                        onPress={() => router.push('/quotations')}
-                        className="w-[48%] p-5 rounded-3xl mb-4 shadow-sm"
-                        style={{ backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1 }}
-                    >
-                        <View className="w-12 h-12 rounded-2xl items-center justify-center mb-4 bg-orange-100">
-                            <FileText size={24} color={colors.primary} strokeWidth={2.5} />
-                        </View>
-                        <Text className="text-xs font-bold uppercase tracking-wider" style={{ color: colors.textSecondary }}>{t('quotations')}</Text>
-                        <Text className="text-2xl font-bold mt-1" style={{ color: colors.text }}>{t('manage')}</Text>
-                    </TouchableOpacity>
-
-                    {stats.map((stat, index) => (
-                        <View key={index} className="w-[48%] p-5 rounded-3xl mb-4 shadow-sm" style={{ backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1 }}>
-                            <View className="w-12 h-12 rounded-2xl items-center justify-center mb-4" style={{ backgroundColor: `${stat.color}15` }}>
-                                <stat.icon size={24} color={stat.color} strokeWidth={2.5} />
-                            </View>
-                            <Text className="text-xs font-bold uppercase tracking-wider" style={{ color: colors.textSecondary }}>{stat.label}</Text>
-                            <Text className="text-2xl font-bold mt-1" style={{ color: colors.text }}>{stat.value}</Text>
-                        </View>
-                    ))}
+                <View className="rounded-3xl p-4 mb-6" style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }}>
+                    <View className="flex-row flex-wrap justify-between">
+                        {[
+                            { key: 'orders', label: 'Orders', sub: 'Track allocations', icon: LayoutGrid, color: '#3B82F6', route: '/(tabs)/orders' },
+                            { key: 'services', label: 'Services', sub: 'Manage catalog', icon: Store, color: '#10B981', route: '/(tabs)/services' },
+                            { key: 'calendar', label: 'Calendar', sub: 'Date availability', icon: CalendarDays, color: '#8B5CF6', route: '/(tabs)/calendar' },
+                            { key: 'profile', label: 'Profile', sub: 'Business details', icon: User, color: colors.primary, route: '/(tabs)/profile' },
+                        ].map((action) => (
+                            <TouchableOpacity
+                                key={action.key}
+                                onPress={() => router.push(action.route as any)}
+                                className="w-[48%] p-4 rounded-2xl mb-3"
+                                style={{ backgroundColor: colors.background, borderColor: colors.border, borderWidth: 1 }}
+                            >
+                                <View className="w-10 h-10 rounded-xl items-center justify-center mb-3" style={{ backgroundColor: `${action.color}20` }}>
+                                    <action.icon size={20} color={action.color} strokeWidth={2.4} />
+                                </View>
+                                <Text className="font-extrabold text-base" style={{ color: colors.text }}>{action.label}</Text>
+                                <Text className="text-[11px] mt-1" style={{ color: colors.textSecondary }}>{action.sub}</Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
                 </View>
 
-                <View className="flex-row justify-between items-center mt-6 mb-4">
+                <View className="flex-row justify-between items-center mt-2 mb-4">
                     <Text className="text-xl font-bold" style={{ color: colors.text }}>{t('upcoming_orders')}</Text>
                     <TouchableOpacity onPress={() => router.push('/(tabs)/orders')}>
                         <Text className="text-primary font-bold text-sm">{t('view_all')}</Text>
@@ -212,7 +191,7 @@ export default function DashboardScreen() {
                 {upcomingBooking ? (
                     <TouchableOpacity
                         onPress={() => router.push('/(tabs)/orders')}
-                        className="rounded-3xl p-5 mb-8 flex-row items-center shadow-sm"
+                        className="rounded-3xl p-5 mb-6 flex-row items-center shadow-sm"
                         style={{ backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1 }}
                     >
                         <View className="w-16 h-16 rounded-2xl items-center justify-center overflow-hidden" style={{ backgroundColor: colors.background }}>
@@ -230,11 +209,52 @@ export default function DashboardScreen() {
                         <ChevronRight size={24} color={colors.text} strokeWidth={2.5} />
                     </TouchableOpacity>
                 ) : (
-                    <View className="rounded-3xl p-10 items-center justify-center mb-12 border border-dashed" style={{ backgroundColor: colors.surface, borderColor: colors.border }}>
+                    <View className="rounded-3xl p-10 items-center justify-center mb-6 border border-dashed" style={{ backgroundColor: colors.surface, borderColor: colors.border }}>
                         <CalendarDays size={40} color={colors.textSecondary} strokeWidth={1.5} />
                         <Text className="mt-3 font-semibold text-base" style={{ color: colors.textSecondary }}>{t('no_upcoming_orders')}</Text>
                     </View>
                 )}
+
+                <TouchableOpacity
+                    activeOpacity={0.9}
+                    onPress={() => router.push('/(tabs)/services')}
+                    className="rounded-3xl overflow-hidden mb-10"
+                    style={{
+                        borderWidth: 1,
+                        borderColor: colors.primary + '55',
+                        backgroundColor: isDarkMode ? colors.surface : '#FFF7ED',
+                    }}
+                >
+                    <View className="p-5 flex-row items-start">
+                        <View
+                            className="w-14 h-14 rounded-2xl items-center justify-center"
+                            style={{ backgroundColor: colors.primary + '22' }}
+                        >
+                            <Sparkles size={28} color={colors.primary} strokeWidth={2.2} />
+                        </View>
+                        <View className="flex-1 ml-4">
+                            <Text className="text-xs font-extrabold uppercase tracking-widest" style={{ color: colors.primary }}>
+                                {t('dashboard_leads_badge', { defaultValue: 'Grow on Ekatraa' })}
+                            </Text>
+                            <Text className="text-lg font-extrabold mt-1 leading-6" style={{ color: colors.text }}>
+                                {t('dashboard_leads_title', { defaultValue: 'Get matched & get more leads' })}
+                            </Text>
+                            <Text className="text-sm mt-2 leading-5" style={{ color: colors.textSecondary }}>
+                                {t('dashboard_leads_body', {
+                                    defaultValue:
+                                        'Enrol your best services, keep photos and pricing fresh, and show up when hosts search — turn views into confirmed bookings.',
+                                })}
+                            </Text>
+                            <View className="flex-row items-center mt-4">
+                                <Text className="font-extrabold text-base" style={{ color: colors.primary }}>
+                                    {t('dashboard_leads_cta', { defaultValue: 'Boost your listings' })}
+                                </Text>
+                                <ChevronRight size={20} color={colors.primary} strokeWidth={2.5} />
+                            </View>
+                        </View>
+                    </View>
+                    <View className="h-1.5" style={{ backgroundColor: colors.primary }} />
+                </TouchableOpacity>
             </ScrollView>
         </SafeAreaView>
     );

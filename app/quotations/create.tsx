@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TextInput, TouchableOpacity, Image, ActivityIndicator, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, ScrollView, TextInput, TouchableOpacity, Image, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { ChevronLeft, Calendar as CalendarIcon, FileText, Plus, X, UploadCloud, CheckCircle2 } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
 import { useTheme } from '../../context/ThemeContext';
+import { useToast } from '../../context/ToastContext';
 import * as ImagePicker from 'expo-image-picker';
 import { readAsStringAsync } from 'expo-file-system/legacy';
 import DateTimePickerModal from 'react-native-modal-datetime-picker';
@@ -17,6 +18,7 @@ export default function CreateQuotation() {
     const params = useLocalSearchParams();
     const editQuotationId = params.edit as string | undefined;
     const { colors } = useTheme();
+    const { showToast } = useToast();
     const [loading, setLoading] = useState(false);
     const [fetching, setFetching] = useState(true);
     const [editing, setEditing] = useState(!!editQuotationId);
@@ -123,7 +125,7 @@ export default function CreateQuotation() {
             }
         } catch (error) {
             console.error('Error fetching quotation for edit:', error);
-            Alert.alert('Error', 'Could not load quotation for editing.');
+            showToast({ variant: 'error', title: 'Could not load quotation', message: 'Could not load quotation for editing.' });
             router.back();
         } finally {
             setFetching(false);
@@ -213,18 +215,20 @@ export default function CreateQuotation() {
             : (selectedService?.name || '');
         
         if (!serviceName || !formData.amount) {
-            Alert.alert('Missing Info', editing
-                ? 'Please enter an amount.'
-                : 'Please select a service and enter an amount.');
+            showToast({
+                variant: 'warning',
+                title: 'Missing info',
+                message: editing ? 'Please enter an amount.' : 'Please select a service and enter an amount.',
+            });
             return;
         }
         const parsedAmount = parseFloat(formData.amount);
         if (isNaN(parsedAmount) || parsedAmount <= 0) {
-            Alert.alert('Invalid Amount', 'Please enter a valid positive amount.');
+            showToast({ variant: 'warning', title: 'Invalid amount', message: 'Please enter a valid positive amount.' });
             return;
         }
         if (parsedAmount > 9999999) {
-            Alert.alert('Invalid Amount', 'Amount cannot exceed ₹99,99,999.');
+            showToast({ variant: 'warning', title: 'Invalid amount', message: 'Amount cannot exceed ₹99,99,999.' });
             return;
         }
 
@@ -326,9 +330,8 @@ export default function CreateQuotation() {
                     // Don't fail quotation update if revenue update fails
                 }
 
-                Alert.alert('Success', 'Quotation updated and resubmitted successfully!', [
-                    { text: 'OK', onPress: () => router.replace('/quotations') }
-                ]);
+                showToast({ variant: 'success', title: 'Quotation updated', message: 'Resubmitted successfully.' });
+                router.replace('/quotations');
             } else {
                 // Create new quotation
                 quotationData.vendor_id = user.id; // Must match auth.uid() for RLS
@@ -374,12 +377,11 @@ export default function CreateQuotation() {
                     // Don't fail quotation creation if revenue update fails
                 }
 
-                Alert.alert('Success', 'Quotation created successfully!', [
-                    { text: 'OK', onPress: () => router.replace('/quotations') }
-                ]);
+                showToast({ variant: 'success', title: 'Quotation created', message: 'Your quotation was saved.' });
+                router.replace('/quotations');
             }
         } catch (error: any) {
-            Alert.alert('Error', error.message || `Failed to ${editing ? 'update' : 'save'} quotation.`);
+            showToast({ variant: 'error', title: 'Could not save', message: error.message || `Failed to ${editing ? 'update' : 'save'} quotation.` });
         } finally {
             setLoading(false);
         }

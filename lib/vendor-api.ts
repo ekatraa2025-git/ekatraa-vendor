@@ -2,7 +2,7 @@
  * Backend API client for vendor app.
  * Uses Supabase session token for vendor authentication.
  */
-import { supabase } from './supabase';
+import { recoverFromAuthStorageError, supabase } from './supabase';
 import Constants from 'expo-constants';
 
 const getApiUrl = (): string => {
@@ -15,7 +15,8 @@ const getApiUrl = (): string => {
 };
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
-    const { data: { session } } = await supabase.auth.getSession();
+    const { data: { session }, error } = await supabase.auth.getSession();
+    if (error) await recoverFromAuthStorageError(error);
     const token = session?.access_token;
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (token) {
@@ -25,7 +26,11 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 }
 
 async function getCurrentVendorId(): Promise<string | null> {
-    const { data: { user } } = await supabase.auth.getUser();
+    const { data: { user }, error } = await supabase.auth.getUser();
+    if (error) {
+        await recoverFromAuthStorageError(error);
+        return null;
+    }
     return user?.id ?? null;
 }
 
@@ -66,33 +71,14 @@ export async function fetchVendorOrders(status?: string): Promise<{ data: any[] 
                 }
 
                 const filtered = adminOrdersData.filter((o: any) => {
-                    if (o?.vendor_id !== vendorId) return false;
+                    const isOrderAllocated = o?.vendor_id === vendorId;
+                    const isItemAllocated = Array.isArray(o?.allocation_vendors)
+                        ? o.allocation_vendors.some((v: any) => v?.vendor_id === vendorId)
+                        : false;
+                    if (!isOrderAllocated && !isItemAllocated) return false;
                     if (status && status !== 'all') return o?.status === status;
                     return true;
                 });
-
-                // Enrich with order details/items and quotation state
-                const detailed = await Promise.all(filtered.map(async (o: any) => {
-                    try {
-                        const detailRes = await fetch(buildApiUrl(`/api/admin/orders/${o.id}`), { headers });
-                        const detail = await detailRes.json().catch(() => null);
-                        const items = Array.isArray(detail?.items) ? detail.items : [];
-                        const total = items.reduce(
-                            (sum: number, i: any) => sum + ((Number(i?.quantity) || 0) * (Number(i?.unit_price) || 0)),
-                            0
-                        ) || Number(o?.total_amount || 0);
-                        const advance = Number(o?.advance_amount || 0);
-                        return {
-                            ...o,
-                            items,
-                            total_order_price: total,
-                            advance_paid: advance,
-                            balance_due: total - advance,
-                        };
-                    } catch {
-                        return o;
-                    }
-                }));
 
                 // Attach quotation_submitted and latest quotation
                 try {
@@ -106,15 +92,30 @@ export async function fetchVendorOrders(status?: string): Promise<{ data: any[] 
                         if (!quoteByOrder.has(q.order_id)) quoteByOrder.set(q.order_id, q);
                     }
                     return {
-                        data: detailed.map((o: any) => ({
+                        data: filtered.map((o: any) => ({
                             ...o,
+                            items: Array.isArray(o?.items) ? o.items : [],
+                            total_order_price: Number(o?.total_amount || 0),
+                            advance_paid: Number(o?.advance_amount || 0),
+                            balance_due: Number(o?.total_amount || 0) - Number(o?.advance_amount || 0),
                             quotation_submitted: quoteByOrder.has(o.id),
                             quotation: quoteByOrder.get(o.id) || null,
                         })),
                         error: null,
                     };
                 } catch {
-                    return { data: detailed, error: null };
+                    return {
+                        data: filtered.map((o: any) => ({
+                            ...o,
+                            items: Array.isArray(o?.items) ? o.items : [],
+                            total_order_price: Number(o?.total_amount || 0),
+                            advance_paid: Number(o?.advance_amount || 0),
+                            balance_due: Number(o?.total_amount || 0) - Number(o?.advance_amount || 0),
+                            quotation_submitted: false,
+                            quotation: null,
+                        })),
+                        error: null,
+                    };
                 }
             }
             return { data: null, error: data?.error || res.statusText };
@@ -215,6 +216,38 @@ export async function confirmOrderStart(orderId: string, otp: string): Promise<{
             method: 'POST',
             headers,
             body: JSON.stringify({ otp }),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) return { data: null, error: data?.error || res.statusText };
+        return { data, error: null };
+    } catch (e: any) {
+        return { data: null, error: e?.message || 'Network error' };
+    }
+}
+
+export async function fetchVendorInvoiceDraft(orderId: string): Promise<{ data: any | null; error: string | null }> {
+    const url = buildApiUrl(`/api/vendor/orders/${orderId}/invoice`);
+    if (!url) return { data: null, error: 'API URL not configured' };
+    try {
+        const headers = await getAuthHeaders();
+        const res = await fetch(url, { headers });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) return { data: null, error: data?.error || res.statusText };
+        return { data, error: null };
+    } catch (e: any) {
+        return { data: null, error: e?.message || 'Network error' };
+    }
+}
+
+export async function submitVendorOrderInvoice(orderId: string, payload: Record<string, unknown>): Promise<{ data: any | null; error: string | null }> {
+    const url = buildApiUrl(`/api/vendor/orders/${orderId}/invoice`);
+    if (!url) return { data: null, error: 'API URL not configured' };
+    try {
+        const headers = await getAuthHeaders();
+        const res = await fetch(url, {
+            method: 'PUT',
+            headers,
+            body: JSON.stringify(payload),
         });
         const data = await res.json().catch(() => null);
         if (!res.ok) return { data: null, error: data?.error || res.statusText };

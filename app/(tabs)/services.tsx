@@ -1,14 +1,17 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Image, FlatList, ActivityIndicator, Modal, TextInput, Alert, RefreshControl, KeyboardAvoidingView, Platform } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, Image, FlatList, ActivityIndicator, Modal, TextInput, RefreshControl, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Plus, Edit3, Trash2, Eye, Star, ChevronRight, X, Check, Store, ChevronDown } from 'lucide-react-native';
+import { useFocusEffect } from 'expo-router';
+import { Plus, Edit3, Trash2, Eye, Star, ChevronRight, X, Check, Store, ChevronDown, Layers } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
 import { resolveStorageImageUrl } from '../../lib/storageImageUrl';
 import { useTheme } from '../../context/ThemeContext';
+import { useToast } from '../../context/ToastContext';
 import { readAsStringAsync } from 'expo-file-system/legacy';
 import Constants from 'expo-constants';
 
 import * as ImagePicker from 'expo-image-picker';
+import { getTierPrice, listPricedTiers } from '../../lib/catalogTierPricing';
 
 const PRICING_TIER_LABELS: Record<string, string> = {
     basic: 'Basic',
@@ -24,15 +27,27 @@ function getPricingTierLabel(key: string): string {
     return PRICING_TIER_LABELS[key] ?? (key ? key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, ' ') : '');
 }
 
+function normalizeCategoryValue(value: string | null | undefined): string {
+    return String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[_\s]+/g, '-');
+}
+
+function looksLikeUuid(value: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
 export default function ServicesScreen() {
     const { colors, isDarkMode } = useTheme();
+    const { showToast, showConfirm } = useToast();
     const [loading, setLoading] = useState(true);
     const [services, setServices] = useState<any[]>([]);
     const [editModalVisible, setEditModalVisible] = useState(false);
     const [editingService, setEditingService] = useState<any>(null);
     const [isNew, setIsNew] = useState(false);
     const [updating, setUpdating] = useState(false);
-    const [selectedImage, setSelectedImage] = useState<string | null>(null);
+    const [selectedImages, setSelectedImages] = useState<string[]>([]);
     const [previewModalVisible, setPreviewModalVisible] = useState(false);
     const [previewServiceData, setPreviewServiceData] = useState<any>(null);
     const [refreshing, setRefreshing] = useState(false);
@@ -42,76 +57,220 @@ export default function ServicesScreen() {
     const [catalogServicePickerVisible, setCatalogServicePickerVisible] = useState(false);
     const [pricingTypePickerVisible, setPricingTypePickerVisible] = useState(false);
     const [selectedCatalogService, setSelectedCatalogService] = useState<any>(null);
+    const [occasions, setOccasions] = useState<{ id: string; name: string }[]>([]);
+    const [occasionPickerVisible, setOccasionPickerVisible] = useState(false);
+    const [bulkModalVisible, setBulkModalVisible] = useState(false);
+    const [bulkOccasionId, setBulkOccasionId] = useState<string>('');
+    const [bulkCategoryId, setBulkCategoryId] = useState<string>('');
+    const [bulkCategoryName, setBulkCategoryName] = useState<string>('');
+    const [bulkCatalogServices, setBulkCatalogServices] = useState<any[]>([]);
+    /** serviceId -> Set of tier keys */
+    const [bulkTierByService, setBulkTierByService] = useState<Record<string, Set<string>>>({});
+    const [bulkCategories, setBulkCategories] = useState<{ id: string; name: string }[]>([]);
+    const [bulkCategoriesLoading, setBulkCategoriesLoading] = useState(false);
+    const [bulkCatalogServicesLoading, setBulkCatalogServicesLoading] = useState(false);
+    const [bulkSaving, setBulkSaving] = useState(false);
+    /** Canonical catalog category id from Profile (vendors.category_id or match on vendors.category name). */
+    const [vendorCategoryId, setVendorCategoryId] = useState<string | null>(null);
+    const [vendorCategoryLabel, setVendorCategoryLabel] = useState<string>('');
+    const [vendorCategoryLoading, setVendorCategoryLoading] = useState(true);
     // Cache for image URLs to avoid repeated API calls
     const imageUrlCache: { [key: string]: string } = {};
 
-    useEffect(() => {
-        console.log('[DEBUG] ServicesScreen mounted');
-        fetchServices();
-        fetchCategories();
-    }, []);
+    const categoryMatchesVendor = useCallback(
+        (categoryId: string | null | undefined, categoryName: string | null | undefined): boolean => {
+            const categoryIdNorm = normalizeCategoryValue(categoryId);
+            const categoryNameNorm = normalizeCategoryValue(categoryName);
+            const vendorIdNorm = normalizeCategoryValue(vendorCategoryId);
+            const vendorLabelNorm = normalizeCategoryValue(vendorCategoryLabel);
 
-    const fetchCategories = async () => {
+            if (vendorIdNorm && categoryIdNorm && categoryIdNorm === vendorIdNorm) return true;
+            if (vendorLabelNorm && categoryNameNorm && categoryNameNorm === vendorLabelNorm) return true;
+            if (vendorLabelNorm && categoryIdNorm && categoryIdNorm === vendorLabelNorm) return true;
+            if (vendorIdNorm && categoryNameNorm && categoryNameNorm === vendorIdNorm) return true;
+            return false;
+        },
+        [vendorCategoryId, vendorCategoryLabel]
+    );
+
+    const loadVendorCategory = useCallback(async () => {
+        setVendorCategoryLoading(true);
         try {
-            const apiUrl = process.env.EXPO_PUBLIC_API_URL ||
-                (Constants.expoConfig?.extra?.EXPO_PUBLIC_API_URL) ||
-                (Constants.expoConfig?.extra?.API_URL);
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) {
+                setVendorCategoryId(null);
+                setVendorCategoryLabel('');
+                return;
+            }
+            const { data: v } = await supabase
+                .from('vendors')
+                .select('category, category_id')
+                .eq('id', user.id)
+                .maybeSingle();
 
-            if (apiUrl) {
-                // Prefer new flow: /api/public/categories (catalog categories)
-                let response = await fetch(`${apiUrl}/api/public/categories`);
-                if (response.ok) {
-                    const apiData = await response.json();
-                    if (apiData && Array.isArray(apiData) && apiData.length > 0) {
-                        const mappedData = apiData.map((item: any) => ({
-                            id: item.id || String(item.name),
-                            name: item.name || String(item.id),
-                            icon_url: item.icon_url,
-                            display_order: item.display_order,
-                        }));
-                        setCategories(mappedData);
-                        return;
-                    }
+            if (!v) {
+                setVendorCategoryId(null);
+                setVendorCategoryLabel('');
+                return;
+            }
+
+            const nameFromRow = typeof v.category === 'string' ? v.category.trim() : '';
+            const idRaw = v.category_id != null && v.category_id !== '' ? String(v.category_id).trim() : '';
+
+            const apiUrl = getApiUrl();
+            if (!apiUrl) {
+                // Best effort when API is unavailable.
+                if (idRaw && !looksLikeUuid(idRaw)) {
+                    setVendorCategoryId(idRaw);
+                    setVendorCategoryLabel(nameFromRow || idRaw);
+                } else {
+                    setVendorCategoryId(null);
+                    setVendorCategoryLabel(nameFromRow || '');
                 }
-                // Fallback: legacy /api/categories (vendor_categories)
-                response = await fetch(`${apiUrl}/api/categories`);
-                if (response.ok) {
-                    const apiData = await response.json();
-                    if (apiData && Array.isArray(apiData) && apiData.length > 0) {
-                        const mappedData = apiData.map((item: any) => ({
-                            id: item.id || String(item.name),
-                            name: item.name || String(item.id)
-                        }));
-                        setCategories(mappedData);
-                        return;
-                    }
+                return;
+            }
+
+            const res = await fetch(`${apiUrl}/api/public/categories`);
+            if (!res.ok) {
+                setVendorCategoryId(null);
+                setVendorCategoryLabel(nameFromRow);
+                return;
+            }
+            const all = await res.json();
+            if (!Array.isArray(all)) {
+                setVendorCategoryId(null);
+                setVendorCategoryLabel(nameFromRow);
+                return;
+            }
+
+            const idNorm = normalizeCategoryValue(idRaw);
+            const nameNorm = normalizeCategoryValue(nameFromRow);
+            const match = all.find(
+                (c: { id?: string; name?: string }) =>
+                    normalizeCategoryValue(c.id) === idNorm ||
+                    normalizeCategoryValue(c.name) === nameNorm ||
+                    normalizeCategoryValue(c.id) === nameNorm ||
+                    normalizeCategoryValue(c.name) === idNorm
+            );
+            if (match?.id) {
+                setVendorCategoryId(String(match.id));
+                setVendorCategoryLabel(String(match.name || nameFromRow || match.id));
+            } else {
+                // If category_id is a readable slug/id, keep it. Ignore legacy UUID ids.
+                if (idRaw && !looksLikeUuid(idRaw)) {
+                    setVendorCategoryId(idRaw);
+                    setVendorCategoryLabel(nameFromRow || idRaw);
+                } else {
+                    setVendorCategoryId(null);
+                    setVendorCategoryLabel(nameFromRow);
                 }
             }
-            console.warn('[CATEGORIES] Failed to fetch categories from API');
-        } catch (error) {
-            console.error('[CATEGORIES] Error fetching categories:', error);
+        } catch {
+            setVendorCategoryId(null);
+            setVendorCategoryLabel('');
+        } finally {
+            setVendorCategoryLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchServices();
+        fetchOccasions();
+        loadVendorCategory();
+    }, [loadVendorCategory]);
+
+    useFocusEffect(
+        useCallback(() => {
+            loadVendorCategory();
+        }, [loadVendorCategory])
+    );
+
+    useEffect(() => {
+        if (!editModalVisible || isNew || !vendorCategoryId || !vendorCategoryLabel) return;
+        setCategories([{ id: vendorCategoryId, name: vendorCategoryLabel }]);
+    }, [editModalVisible, isNew, vendorCategoryId, vendorCategoryLabel]);
+
+    const getApiUrl = () =>
+        process.env.EXPO_PUBLIC_API_URL ||
+        Constants.expoConfig?.extra?.EXPO_PUBLIC_API_URL ||
+        Constants.expoConfig?.extra?.API_URL;
+
+    const fetchOccasions = async () => {
+        try {
+            const apiUrl = getApiUrl();
+            if (!apiUrl) return;
+            const response = await fetch(`${apiUrl}/api/public/occasions`);
+            if (response.ok) {
+                const data = await response.json();
+                if (Array.isArray(data) && data.length > 0) {
+                    setOccasions(data.map((o: any) => ({ id: o.id, name: o.name || o.id })));
+                }
+            }
+        } catch (e) {
+            console.warn('[OCCASIONS]', e);
         }
     };
 
-    const fetchCatalogServices = async (categoryId: string) => {
+    const fetchCategoriesForOccasion = async (
+        occasionId: string
+    ): Promise<
+        { id: string; name: string; icon_url?: string; display_order?: number }[]
+    > => {
+        if (!vendorCategoryId) {
+            setCategories([]);
+            return [];
+        }
         try {
-            const apiUrl = process.env.EXPO_PUBLIC_API_URL ||
-                (Constants.expoConfig?.extra?.EXPO_PUBLIC_API_URL) ||
-                (Constants.expoConfig?.extra?.API_URL);
+            const apiUrl = getApiUrl();
+            if (!apiUrl || !occasionId) {
+                setCategories([]);
+                return [];
+            }
+            const response = await fetch(
+                `${apiUrl}/api/public/categories?occasion_id=${encodeURIComponent(occasionId)}`
+            );
+            if (response.ok) {
+                const apiData = await response.json();
+                if (apiData && Array.isArray(apiData) && apiData.length > 0) {
+                    const mapped = apiData.map((item: any) => ({
+                        id: item.id || String(item.name),
+                        name: item.name || String(item.id),
+                        icon_url: item.icon_url,
+                        display_order: item.display_order,
+                    }));
+                    const filtered = mapped.filter((c) => categoryMatchesVendor(c.id, c.name));
+                    setCategories(filtered);
+                    return filtered;
+                }
+            }
+            setCategories([]);
+            return [];
+        } catch (error) {
+            console.error('[CATEGORIES]', error);
+            setCategories([]);
+            return [];
+        }
+    };
 
-            if (apiUrl) {
+    const fetchCatalogServices = async (occasionId: string, categoryId: string) => {
+        try {
+            const apiUrl = getApiUrl();
+            if (apiUrl && occasionId && categoryId) {
                 const servicesUrl = new URL(`${apiUrl}/api/public/services`);
+                servicesUrl.searchParams.set('occasion_id', occasionId);
                 servicesUrl.searchParams.set('category_id', String(categoryId));
                 const response = await fetch(servicesUrl.toString());
                 if (response.ok) {
                     const data = await response.json();
-                    setCatalogServices(Array.isArray(data) ? data : []);
+                    const raw = Array.isArray(data) ? data : [];
+                    setCatalogServices(
+                        raw.filter((s: { category_id?: string }) => s.category_id === categoryId)
+                    );
                     return;
                 }
             }
-            console.warn('[CATALOG_SERVICES] Failed to fetch catalog services from API');
         } catch (error) {
-            console.error('[CATALOG_SERVICES] Error fetching catalog services:', error);
+            console.error('[CATALOG_SERVICES]', error);
         }
         setCatalogServices([]);
     };
@@ -210,16 +369,25 @@ export default function ServicesScreen() {
         }
     };
 
-    const pickImage = async () => {
+    const pickImages = async () => {
+        const existingCount = Array.isArray(editingService?.image_urls) ? editingService.image_urls.length : 0;
+        const remaining = Math.max(0, 12 - existingCount - selectedImages.length);
+        if (remaining <= 0) {
+            showToast({ variant: 'warning', title: 'Limit reached', message: 'You can add up to 12 images per service.' });
+            return;
+        }
         let result = await ImagePicker.launchImageLibraryAsync({
             mediaTypes: 'images',
-            allowsEditing: true,
-            aspect: [16, 9],
+            allowsEditing: false,
+            allowsMultipleSelection: true,
+            selectionLimit: remaining,
             quality: 0.8,
         });
 
         if (!result.canceled) {
-            setSelectedImage(result.assets[0].uri);
+            const picked = Array.isArray(result.assets) ? result.assets.map((a) => a.uri).filter(Boolean) : [];
+            if (!picked.length) return;
+            setSelectedImages((prev) => [...prev, ...picked].slice(0, 12 - existingCount));
         }
     };
 
@@ -229,12 +397,25 @@ export default function ServicesScreen() {
     };
 
     const handleSaveService = async () => {
-        if (isNew && (!editingService?.category || !editingService?.name || !editingService?.price_amount)) {
-            Alert.alert('Required Fields', 'Please select category, catalog service, and pricing tier.');
+        if (isNew && (!editingService?.occasion_id || !editingService?.category || !editingService?.name || !editingService?.price_amount)) {
+            showToast({ variant: 'warning', title: 'Required fields', message: 'Please select occasion, category, catalog service, and pricing tier.' });
+            return;
+        }
+        if (
+            isNew &&
+            vendorCategoryId &&
+            editingService?.category_id &&
+            editingService.category_id !== vendorCategoryId
+        ) {
+            showToast({ variant: 'warning', title: 'Category mismatch', message: 'Service category must match your business category in Profile.' });
             return;
         }
         if (!isNew && (!editingService?.name || !editingService?.price_amount)) {
-            Alert.alert('Required Fields', 'Please enter service name and price.');
+            showToast({ variant: 'warning', title: 'Required fields', message: 'Please enter service name and price.' });
+            return;
+        }
+        if (!isNew && vendorCategoryId && editingService?.category_id && editingService.category_id !== vendorCategoryId) {
+            showToast({ variant: 'warning', title: 'Category mismatch', message: 'Category must match your business category in Profile.' });
             return;
         }
 
@@ -244,15 +425,24 @@ export default function ServicesScreen() {
             if (!user) return;
 
             let imageUrls = (editingService.image_urls || []).filter((uri: string) => uri && !uri.startsWith('file') && !uri.startsWith('content'));
-            if (selectedImage) {
-                const uploadedUrl = await uploadImage(selectedImage, 'service');
-                imageUrls = [uploadedUrl];
+            if (selectedImages.length) {
+                const uploaded: string[] = [];
+                for (const localUri of selectedImages) {
+                    const uploadedUrl = await uploadImage(localUri, 'service');
+                    if (uploadedUrl) uploaded.push(uploadedUrl);
+                }
+                imageUrls = [...imageUrls, ...uploaded].slice(0, 12);
             }
+
+            const categoryLabel =
+                !isNew && vendorCategoryId && vendorCategoryLabel
+                    ? vendorCategoryLabel
+                    : editingService.category || 'Service';
 
             const serviceData: any = {
                 name: editingService.name,
                 price_amount: parseFloat(editingService.price_amount),
-                category: editingService.category || 'Service',
+                category: categoryLabel,
                 is_active: editingService.is_active ?? true,
                 image_urls: imageUrls,
                 vendor_id: user.id
@@ -278,54 +468,253 @@ export default function ServicesScreen() {
 
             setEditModalVisible(false);
             fetchServices();
-            Alert.alert('Success', `Service ${isNew ? 'created' : 'updated'} successfully`);
+            showToast({
+                variant: 'success',
+                title: `Service ${isNew ? 'created' : 'updated'}`,
+                message: `Service ${isNew ? 'created' : 'updated'} successfully.`,
+            });
         } catch (error: any) {
-            Alert.alert('Error', error.message || 'Failed to save service');
+            showToast({ variant: 'error', title: 'Could not save', message: error.message || 'Failed to save service' });
         } finally {
             setUpdating(false);
         }
     };
 
     const deleteService = async (id: string) => {
-        Alert.alert(
-            'Delete Service',
-            'Are you sure you want to delete this service?',
-            [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                    text: 'Delete',
-                    style: 'destructive',
-                    onPress: async () => {
-                        try {
-                            const { error } = await supabase
-                                .from('services')
-                                .delete()
-                                .eq('id', id);
+        showConfirm({
+            title: 'Delete service',
+            message: 'Are you sure you want to delete this service?',
+            confirmLabel: 'Delete',
+            destructive: true,
+            onConfirm: async () => {
+                try {
+                    const { error } = await supabase
+                        .from('services')
+                        .delete()
+                        .eq('id', id);
 
-                            if (error) throw error;
-                            setServices(services.filter(s => s.id !== id));
-                        } catch (error) {
-                            console.error('Error deleting service:', error);
-                        }
-                    }
+                    if (error) throw error;
+                    setServices(services.filter(s => s.id !== id));
+                } catch (error) {
+                    console.error('Error deleting service:', error);
                 }
-            ]
-        );
+            },
+        });
     };
 
     const openAddModal = () => {
-        setEditingService({ name: '', price_amount: '', category: '', category_id: '', pricing_type: '', offerable_service_id: '', is_active: true });
+        if (vendorCategoryLoading) {
+            showToast({ variant: 'info', title: 'Please wait', message: 'Loading your profile category…' });
+            return;
+        }
+        if (!vendorCategoryId) {
+            showToast({
+                variant: 'warning',
+                title: 'Category required',
+                message: 'Set your business category in Profile first. It must match a catalog category so services stay in your line of business.',
+            });
+            return;
+        }
+        setEditingService({
+            name: '',
+            price_amount: '',
+            category: '',
+            category_id: '',
+            occasion_id: '',
+            occasion_name: '',
+            pricing_type: '',
+            offerable_service_id: '',
+            is_active: true,
+        });
         setIsNew(true);
-        setSelectedImage(null);
+        setSelectedImages([]);
         setSelectedCatalogService(null);
         setCatalogServices([]);
+        setCategories([]);
         setEditModalVisible(true);
+    };
+
+    const openBulkModal = () => {
+        if (vendorCategoryLoading) {
+            showToast({ variant: 'info', title: 'Please wait', message: 'Loading your profile category…' });
+            return;
+        }
+        if (!vendorCategoryId) {
+            showToast({ variant: 'warning', title: 'Category required', message: 'Set your business category in Profile first.' });
+            return;
+        }
+        setBulkOccasionId('');
+        setBulkCategoryId('');
+        setBulkCategoryName('');
+        setBulkCatalogServices([]);
+        setBulkTierByService({});
+        setBulkCategories([]);
+        setBulkCategoriesLoading(false);
+        setBulkCatalogServicesLoading(false);
+        setBulkModalVisible(true);
+    };
+
+    useEffect(() => {
+        if (!bulkOccasionId || !vendorCategoryId) {
+            setBulkCategories([]);
+            if (!bulkOccasionId) {
+                setBulkCategoryId('');
+                setBulkCategoryName('');
+            }
+            setBulkCategoriesLoading(false);
+            return;
+        }
+        let cancelled = false;
+        setBulkCategoriesLoading(true);
+        (async () => {
+            const apiUrl = getApiUrl();
+            if (!apiUrl) {
+                if (!cancelled) setBulkCategoriesLoading(false);
+                return;
+            }
+            try {
+                const res = await fetch(
+                    `${apiUrl}/api/public/categories?occasion_id=${encodeURIComponent(bulkOccasionId)}`
+                );
+                if (res.ok) {
+                    const data = await res.json();
+                    if (Array.isArray(data)) {
+                        const mapped = data.map((item: any) => ({
+                            id: item.id || String(item.name),
+                            name: item.name || String(item.id),
+                        }));
+                        const filtered = mapped.filter((c) => categoryMatchesVendor(c.id, c.name));
+                        if (!cancelled) {
+                            setBulkCategories(filtered);
+                            if (filtered.length === 1) {
+                                setBulkCategoryId(filtered[0].id);
+                                setBulkCategoryName(filtered[0].name);
+                            } else {
+                                setBulkCategoryId('');
+                                setBulkCategoryName('');
+                            }
+                        }
+                    }
+                } else if (!cancelled) {
+                    setBulkCategories([]);
+                }
+            } catch {
+                if (!cancelled) setBulkCategories([]);
+            } finally {
+                if (!cancelled) setBulkCategoriesLoading(false);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [bulkOccasionId, vendorCategoryId, categoryMatchesVendor]);
+
+    useEffect(() => {
+        if (!bulkOccasionId || !bulkCategoryId) {
+            setBulkCatalogServices([]);
+            setBulkCatalogServicesLoading(false);
+            return;
+        }
+        let cancelled = false;
+        setBulkCatalogServicesLoading(true);
+        (async () => {
+            const apiUrl = getApiUrl();
+            if (!apiUrl) {
+                if (!cancelled) setBulkCatalogServicesLoading(false);
+                return;
+            }
+            try {
+                const url = new URL(`${apiUrl}/api/public/services`);
+                url.searchParams.set('occasion_id', bulkOccasionId);
+                url.searchParams.set('category_id', bulkCategoryId);
+                const res = await fetch(url.toString());
+                if (res.ok) {
+                    const data = await res.json();
+                    const raw = Array.isArray(data) ? data : [];
+                    if (!cancelled) {
+                        setBulkCatalogServices(
+                            raw.filter((s: { category_id?: string }) => s.category_id === bulkCategoryId)
+                        );
+                    }
+                } else if (!cancelled) {
+                    setBulkCatalogServices([]);
+                }
+            } catch {
+                if (!cancelled) setBulkCatalogServices([]);
+            } finally {
+                if (!cancelled) setBulkCatalogServicesLoading(false);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [bulkOccasionId, bulkCategoryId]);
+
+    const toggleBulkTier = (serviceId: string, tierKey: string) => {
+        setBulkTierByService((prev) => {
+            const next = { ...prev };
+            const cur = new Set(next[serviceId] || []);
+            if (cur.has(tierKey)) cur.delete(tierKey);
+            else cur.add(tierKey);
+            next[serviceId] = cur;
+            return next;
+        });
+    };
+
+    const handleBulkSave = async () => {
+        if (!bulkOccasionId || !bulkCategoryId || !bulkCategoryName) {
+            showToast({ variant: 'warning', title: 'Required', message: 'Select occasion and category.' });
+            return;
+        }
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+        const rows: any[] = [];
+        for (const svc of bulkCatalogServices) {
+            if (svc.category_id !== bulkCategoryId) continue;
+            const tiers = bulkTierByService[svc.id];
+            if (!tiers || tiers.size === 0) continue;
+            for (const tk of tiers) {
+                const price = getTierPrice(svc, tk);
+                if (price <= 0) continue;
+                rows.push({
+                    name: svc.name,
+                    price_amount: price,
+                    category: bulkCategoryName,
+                    is_active: true,
+                    image_urls: svc.image_url ? [svc.image_url] : [],
+                    vendor_id: user.id,
+                    pricing_type: tk,
+                    offerable_service_id: svc.id,
+                });
+            }
+        }
+        if (rows.length === 0) {
+            showToast({ variant: 'warning', title: 'Nothing to add', message: 'Select at least one catalog service and pricing tier.' });
+            return;
+        }
+        try {
+            setBulkSaving(true);
+            const { error } = await supabase.from('services').insert(rows);
+            if (error) throw error;
+            setBulkModalVisible(false);
+            fetchServices();
+            showToast({ variant: 'success', title: 'Bulk add complete', message: `Added ${rows.length} service line(s).` });
+        } catch (e: any) {
+            showToast({ variant: 'error', title: 'Bulk add failed', message: e?.message || 'Bulk add failed' });
+        } finally {
+            setBulkSaving(false);
+        }
     };
 
     const openEditModal = (service: any) => {
         setEditingService(service);
         setIsNew(false);
-        setSelectedImage(null);
+        setSelectedImages([]);
+        if (vendorCategoryId && vendorCategoryLabel) {
+            setCategories([{ id: vendorCategoryId, name: vendorCategoryLabel }]);
+        } else {
+            setCategories([]);
+        }
         setEditModalVisible(true);
     };
 
@@ -396,6 +785,54 @@ export default function ServicesScreen() {
         );
     };
 
+    const ServiceThumb = ({ imageUrl }: { imageUrl: string | null | undefined }) => {
+        const [displayUrl, setDisplayUrl] = useState<string>('');
+        const [loadingThumb, setLoadingThumb] = useState(true);
+
+        useEffect(() => {
+            const loadImage = async () => {
+                setLoadingThumb(true);
+                if (!imageUrl || imageUrl.startsWith('file') || imageUrl.startsWith('content')) {
+                    setLoadingThumb(false);
+                    return;
+                }
+                try {
+                    const url = await getImageUrl(imageUrl);
+                    if (url) setDisplayUrl(url);
+                } catch {
+                    setDisplayUrl('');
+                } finally {
+                    setLoadingThumb(false);
+                }
+            };
+            loadImage();
+        }, [imageUrl]);
+
+        if (!imageUrl) {
+            return (
+                <View className="w-24 h-24 rounded-2xl items-center justify-center" style={{ backgroundColor: colors.surface }}>
+                    <Store size={20} color={colors.textSecondary} />
+                </View>
+            );
+        }
+
+        if (loadingThumb) {
+            return (
+                <View className="w-24 h-24 rounded-2xl items-center justify-center" style={{ backgroundColor: colors.surface }}>
+                    <ActivityIndicator size="small" color="#FF6B00" />
+                </View>
+            );
+        }
+
+        return displayUrl ? (
+            <Image source={{ uri: displayUrl }} className="w-24 h-24 rounded-2xl" resizeMode="cover" />
+        ) : (
+            <View className="w-24 h-24 rounded-2xl items-center justify-center" style={{ backgroundColor: colors.surface }}>
+                <Store size={20} color={colors.textSecondary} />
+            </View>
+        );
+    };
+
     const renderServiceCard = ({ item }: { item: any }) => (
         <TouchableOpacity
             activeOpacity={0.9}
@@ -454,33 +891,56 @@ export default function ServicesScreen() {
 
     if (loading) {
         return (
-            <SafeAreaView className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
+            <SafeAreaView edges={['left', 'right']} className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
                 <ActivityIndicator size="large" color="#FF6B00" />
             </SafeAreaView>
         );
     }
 
     return (
-        <SafeAreaView className="flex-1" style={{ backgroundColor: colors.background }}>
-            <View className="px-6 py-4 flex-row justify-between items-center z-10" style={{ backgroundColor: colors.surface }}>
-                <View>
-                    <Text className="text-2xl font-bold" style={{ color: colors.text }}>My Services</Text>
-                    <Text className="text-xs" style={{ color: colors.textSecondary }}>Manage your product catalog</Text>
+        <SafeAreaView edges={['left', 'right']} className="flex-1" style={{ backgroundColor: colors.background }}>
+            <View className="px-6 py-4 z-10">
+                <View className="rounded-3xl p-5 flex-row justify-between items-center" style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }}>
+                    <View className="flex-1 mr-3">
+                        <Text className="text-2xl font-bold" style={{ color: colors.text }}>My Services</Text>
+                        <Text className="text-xs" style={{ color: colors.textSecondary }}>Manage your product catalog</Text>
+                        {vendorCategoryLabel ? (
+                            <Text className="text-xs mt-0.5" style={{ color: colors.textSecondary }}>
+                                Catalog category: {vendorCategoryLabel}
+                            </Text>
+                        ) : !vendorCategoryLoading ? (
+                            <Text className="text-xs mt-0.5" style={{ color: colors.textSecondary }}>
+                                Set your business category in Profile to add catalog services.
+                            </Text>
+                        ) : null}
+                    </View>
+                    <View className="flex-row gap-2">
+                        <TouchableOpacity
+                            onPress={openBulkModal}
+                            className="bg-primary/15 w-12 h-12 rounded-2xl items-center justify-center border border-primary/30"
+                        >
+                            <Layers size={22} color="#FF6B00" />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            onPress={openAddModal}
+                            className="bg-primary w-12 h-12 rounded-2xl items-center justify-center shadow-lg shadow-primary/20"
+                        >
+                            <Plus size={24} color="white" />
+                        </TouchableOpacity>
+                    </View>
                 </View>
-                <TouchableOpacity
-                    onPress={openAddModal}
-                    className="bg-primary w-12 h-12 rounded-2xl items-center justify-center shadow-lg shadow-primary/20"
-                >
-                    <Plus size={24} color="white" />
-                </TouchableOpacity>
             </View>
 
             <FlatList
                 data={services}
                 renderItem={renderServiceCard}
                 keyExtractor={(item) => item.id}
-                contentContainerStyle={{ padding: 24 }}
+                contentContainerStyle={{ padding: 24, paddingBottom: 120 }}
                 showsVerticalScrollIndicator={false}
+                initialNumToRender={6}
+                maxToRenderPerBatch={6}
+                windowSize={7}
+                removeClippedSubviews
                 refreshControl={
                     <RefreshControl
                         refreshing={refreshing}
@@ -538,45 +998,112 @@ export default function ServicesScreen() {
                         <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
                             <View className="space-y-6">
                                 <TouchableOpacity
-                                    onPress={pickImage}
+                                    onPress={pickImages}
                                     className="border-2 border-dashed rounded-[32px] overflow-hidden mb-6 items-center justify-center h-48"
                                     style={{ backgroundColor: colors.background, borderColor: colors.border }}
                                 >
-                                    {selectedImage ? (
+                                    {selectedImages[0] ? (
                                         <Image
-                                            source={{ uri: selectedImage }}
+                                            source={{ uri: selectedImages[0] }}
                                             className="w-full h-full"
-                                            onError={(e) => console.error('[IMAGE LOAD ERROR] Modal Preview:', e.nativeEvent.error, 'URI:', selectedImage)}
+                                            onError={(e) => console.error('[IMAGE LOAD ERROR] Modal Preview:', e.nativeEvent.error, 'URI:', selectedImages[0])}
                                         />
                                     ) : editingService?.image_urls?.[0] ? (
                                         <ServiceImage imageUrl={editingService.image_urls[0]} />
                                     ) : (
                                         <View className="items-center">
                                             <Plus size={32} color={colors.textSecondary} />
-                                            <Text className="mt-2 font-bold text-xs uppercase tracking-widest" style={{ color: colors.textSecondary }}>Add Photo</Text>
+                                            <Text className="mt-2 font-bold text-xs uppercase tracking-widest" style={{ color: colors.textSecondary }}>Add Photos</Text>
                                         </View>
                                     )}
                                 </TouchableOpacity>
+                                <Text className="text-[11px] mb-3" style={{ color: colors.textSecondary }}>
+                                    Upload multiple service photos (max 12). First image is used as cover.
+                                </Text>
+                                {Array.isArray(editingService?.image_urls) && editingService.image_urls.length > 0 ? (
+                                    <View className="mb-3">
+                                        <Text className="text-xs font-bold mb-2 uppercase tracking-widest" style={{ color: colors.textSecondary }}>
+                                            Existing photos
+                                        </Text>
+                                        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                                            {editingService.image_urls.map((uri: string, idx: number) => (
+                                                <View key={`${uri}-${idx}`} className="mr-3 relative">
+                                                    <ServiceThumb imageUrl={uri} />
+                                                    <TouchableOpacity
+                                                        onPress={() =>
+                                                            setEditingService({
+                                                                ...editingService,
+                                                                image_urls: (editingService.image_urls || []).filter((_: string, i: number) => i !== idx),
+                                                            })
+                                                        }
+                                                        className="absolute top-2 right-2 w-7 h-7 rounded-full bg-red-500 items-center justify-center"
+                                                    >
+                                                        <X size={14} color="#fff" />
+                                                    </TouchableOpacity>
+                                                </View>
+                                            ))}
+                                        </ScrollView>
+                                    </View>
+                                ) : null}
+                                {selectedImages.length > 0 ? (
+                                    <View className="mb-4">
+                                        <Text className="text-xs font-bold mb-2 uppercase tracking-widest" style={{ color: colors.textSecondary }}>
+                                            New photos to upload
+                                        </Text>
+                                        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                                            {selectedImages.map((uri, idx) => (
+                                                <View key={`${uri}-${idx}`} className="mr-3 relative">
+                                                    <Image source={{ uri }} className="w-24 h-24 rounded-2xl" />
+                                                    <TouchableOpacity
+                                                        onPress={() => setSelectedImages((prev) => prev.filter((_, i) => i !== idx))}
+                                                        className="absolute -top-1 -right-1 w-7 h-7 rounded-full bg-red-500 items-center justify-center"
+                                                    >
+                                                        <X size={14} color="#fff" />
+                                                    </TouchableOpacity>
+                                                </View>
+                                            ))}
+                                        </ScrollView>
+                                    </View>
+                                ) : null}
 
                                 {isNew ? (
                                     <>
-                                        {/* Category Dropdown */}
                                         <View>
-                                            <Text className="text-sm font-bold mb-2 uppercase tracking-widest text-[10px]" style={{ color: colors.text }}>Category</Text>
+                                            <Text className="text-sm font-bold mb-2 uppercase tracking-widest text-[10px]" style={{ color: colors.text }}>Occasion</Text>
                                             <TouchableOpacity
-                                                onPress={() => setCategoryPickerVisible(true)}
+                                                onPress={() => setOccasionPickerVisible(true)}
                                                 className="rounded-2xl px-4 py-4 flex-row items-center justify-between"
                                                 style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }}
                                             >
-                                                <Text style={{ color: editingService?.category ? colors.text : colors.textSecondary, fontWeight: '600' }}>
-                                                    {editingService?.category || 'Select a category'}
+                                                <Text style={{ color: editingService?.occasion_name ? colors.text : colors.textSecondary, fontWeight: '600' }}>
+                                                    {editingService?.occasion_name || 'Select occasion (filters catalog)'}
                                                 </Text>
                                                 <ChevronDown size={20} color={colors.textSecondary} />
                                             </TouchableOpacity>
                                         </View>
 
+                                        {/* Category from Profile — catalog is scoped to this category for every occasion */}
+                                        <View>
+                                            <Text className="text-sm font-bold mb-2 uppercase tracking-widest text-[10px]" style={{ color: colors.text }}>Category (from profile)</Text>
+                                            <View
+                                                className="rounded-2xl px-4 py-4 flex-row items-center justify-between"
+                                                style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }}
+                                            >
+                                                <Text style={{ color: vendorCategoryLabel ? colors.text : colors.textSecondary, fontWeight: '600' }}>
+                                                    {vendorCategoryLoading
+                                                        ? 'Loading…'
+                                                        : vendorCategoryLabel || 'Set in Profile'}
+                                                </Text>
+                                            </View>
+                                            {!vendorCategoryLoading && !vendorCategoryId ? (
+                                                <Text className="text-xs mt-2" style={{ color: colors.textSecondary }}>
+                                                    Set your business category under Profile so only catalog items for your line of business appear.
+                                                </Text>
+                                            ) : null}
+                                        </View>
+
                                         {/* Catalog Service Dropdown */}
-                                        {editingService?.category ? (
+                                        {editingService?.occasion_id && editingService?.category && vendorCategoryId ? (
                                             <View className="mt-4">
                                                 <Text className="text-sm font-bold mb-2 uppercase tracking-widest text-[10px]" style={{ color: colors.text }}>Catalog Service</Text>
                                                 <TouchableOpacity
@@ -703,6 +1230,112 @@ export default function ServicesScreen() {
                 </KeyboardAvoidingView>
             </Modal>
 
+            {/* Occasion Picker (new service — matches customer-facing occasion → category → catalog) */}
+            <Modal
+                visible={occasionPickerVisible}
+                transparent={true}
+                animationType="slide"
+                onRequestClose={() => setOccasionPickerVisible(false)}
+            >
+                <View className="flex-1 justify-end bg-black/50">
+                    <View
+                        className="rounded-t-3xl p-6"
+                        style={{
+                            backgroundColor: colors.surface,
+                            height: '60%',
+                        }}
+                    >
+                        <View className="flex-row justify-between items-center mb-6">
+                            <Text className="text-xl font-bold" style={{ color: colors.text }}>Select Occasion</Text>
+                            <TouchableOpacity onPress={() => setOccasionPickerVisible(false)}>
+                                <X size={24} color={colors.textSecondary} />
+                            </TouchableOpacity>
+                        </View>
+                        {occasions.length === 0 ? (
+                            <View className="flex-1 items-center justify-center py-20">
+                                <Text style={{ color: colors.textSecondary }}>No occasions loaded. Check API URL.</Text>
+                            </View>
+                        ) : (
+                            <FlatList
+                                data={occasions}
+                                keyExtractor={(item) => item.id}
+                                renderItem={({ item }) => (
+                                    <TouchableOpacity
+                                        onPress={async () => {
+                                            if (vendorCategoryLoading) {
+                                                showToast({ variant: 'info', title: 'Please wait', message: 'Loading your profile category…' });
+                                                return;
+                                            }
+                                            if (!vendorCategoryId) {
+                                                showToast({
+                                                    variant: 'warning',
+                                                    title: 'Category required',
+                                                    message: 'Set your business category in Profile first.',
+                                                });
+                                                return;
+                                            }
+                                            setOccasionPickerVisible(false);
+                                            const cats = await fetchCategoriesForOccasion(item.id);
+                                            if (cats.length === 0) {
+                                                showToast({
+                                                    variant: 'warning',
+                                                    title: 'Not available for this occasion',
+                                                    message: 'Your business category is not linked to this occasion in the catalog. Try another occasion or update catalog mapping.',
+                                                });
+                                                return;
+                                            }
+                                            const c = cats[0];
+                                            setEditingService({
+                                                ...editingService,
+                                                occasion_id: item.id,
+                                                occasion_name: item.name,
+                                                category: c.name,
+                                                category_id: c.id,
+                                                name: '',
+                                                price_amount: '',
+                                                pricing_type: '',
+                                                offerable_service_id: '',
+                                            });
+                                            setSelectedCatalogService(null);
+                                            setCatalogServices([]);
+                                            fetchCatalogServices(item.id, c.id);
+                                        }}
+                                        className="py-4 px-4 rounded-xl mb-2 flex-row items-center justify-between"
+                                        style={{
+                                            backgroundColor:
+                                                editingService?.occasion_id === item.id
+                                                    ? colors.primary + '1A'
+                                                    : colors.background,
+                                            borderWidth: editingService?.occasion_id === item.id ? 1 : 0,
+                                            borderColor:
+                                                editingService?.occasion_id === item.id
+                                                    ? colors.primary + '33'
+                                                    : 'transparent',
+                                        }}
+                                    >
+                                        <Text
+                                            className="text-base font-bold"
+                                            style={{
+                                                color:
+                                                    editingService?.occasion_id === item.id
+                                                        ? colors.primary
+                                                        : colors.text,
+                                            }}
+                                        >
+                                            {item.name}
+                                        </Text>
+                                        {editingService?.occasion_id === item.id && (
+                                            <Check size={20} color="#FF6B00" />
+                                        )}
+                                    </TouchableOpacity>
+                                )}
+                                showsVerticalScrollIndicator={false}
+                            />
+                        )}
+                    </View>
+                </View>
+            </Modal>
+
             {/* Category Picker Modal - Matching onboarding style */}
             <Modal
                 visible={categoryPickerVisible}
@@ -737,12 +1370,25 @@ export default function ServicesScreen() {
                                     <TouchableOpacity
                                         onPress={() => {
                                             if (isNew) {
-                                                setEditingService({ ...editingService, category: item.name, category_id: item.id, name: '', price_amount: '', pricing_type: '', offerable_service_id: '' });
+                                                const oid = editingService?.occasion_id;
+                                                setEditingService({
+                                                    ...editingService,
+                                                    category: item.name,
+                                                    category_id: item.id,
+                                                    name: '',
+                                                    price_amount: '',
+                                                    pricing_type: '',
+                                                    offerable_service_id: '',
+                                                });
                                                 setSelectedCatalogService(null);
                                                 setCatalogServices([]);
-                                                fetchCatalogServices(item.id);
+                                                if (oid) fetchCatalogServices(oid, item.id);
                                             } else {
-                                                setEditingService({ ...editingService, category: item.name });
+                                                setEditingService({
+                                                    ...editingService,
+                                                    category: item.name,
+                                                    category_id: item.id,
+                                                });
                                             }
                                             setCategoryPickerVisible(false);
                                         }}
@@ -867,14 +1513,7 @@ export default function ServicesScreen() {
                         </View>
                                 {selectedCatalogService && (
                                     <View>
-                                        {[
-                                            ...(selectedCatalogService.price_basic != null ? [{ key: 'basic', label: 'Basic', price: selectedCatalogService.price_basic ?? 0, desc: 'Entry level' }] : []),
-                                            { key: 'classic_value', label: 'Classic Value', price: selectedCatalogService.price_classic_value ?? 0, desc: 'Economy option' },
-                                            { key: 'signature', label: 'Signature', price: selectedCatalogService.price_signature ?? 0, desc: 'Popular choice' },
-                                            { key: 'prestige', label: 'Prestige', price: selectedCatalogService.price_prestige ?? 0, desc: 'Premium quality' },
-                                            { key: 'royal', label: 'Royal', price: selectedCatalogService.price_royal ?? 0, desc: 'Luxury tier' },
-                                            { key: 'imperial', label: 'Imperial', price: selectedCatalogService.price_imperial ?? 0, desc: 'Top tier' },
-                                        ].filter(t => t.price > 0).map((tier) => (
+                                        {listPricedTiers(selectedCatalogService).map((tier) => (
                                     <TouchableOpacity
                                         key={tier.key}
                                         onPress={() => {
@@ -900,7 +1539,7 @@ export default function ServicesScreen() {
                                                 {tier.label}
                                             </Text>
                                             <Text className="text-xs mt-1" style={{ color: colors.textSecondary }}>
-                                                {tier.desc}
+                                                Catalog tier
                                             </Text>
                                         </View>
                                         <View className="flex-row items-center">
@@ -918,6 +1557,194 @@ export default function ServicesScreen() {
                                 ))}
                             </View>
                         )}
+                    </View>
+                </View>
+            </Modal>
+
+            {/* Bulk add: occasion + category + multi tier selection */}
+            <Modal
+                animationType="slide"
+                transparent={true}
+                visible={bulkModalVisible}
+                onRequestClose={() => !bulkSaving && setBulkModalVisible(false)}
+            >
+                <View className="flex-1 justify-end bg-black/50">
+                    <View
+                        className="rounded-t-3xl p-6"
+                        style={{ backgroundColor: colors.surface, maxHeight: '92%' }}
+                    >
+                        <View className="flex-row justify-between items-center mb-4">
+                            <View>
+                                <Text className="text-xl font-bold" style={{ color: colors.text }}>Bulk add</Text>
+                                <Text className="text-xs mt-1" style={{ color: colors.textSecondary }}>
+                                    Catalog is limited to your business category from Profile and the occasion you pick.
+                                </Text>
+                            </View>
+                            <TouchableOpacity
+                                onPress={() => !bulkSaving && setBulkModalVisible(false)}
+                                disabled={bulkSaving}
+                            >
+                                <X size={24} color={colors.textSecondary} />
+                            </TouchableOpacity>
+                        </View>
+                        <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+                            <Text className="text-xs font-bold uppercase mb-2" style={{ color: colors.textSecondary }}>
+                                Occasion
+                            </Text>
+                            <View className="flex-row flex-wrap gap-2 mb-4">
+                                {occasions.map((o) => (
+                                    <TouchableOpacity
+                                        key={o.id}
+                                        onPress={() => {
+                                            setBulkOccasionId(o.id);
+                                            setBulkCategoryId('');
+                                            setBulkCategoryName('');
+                                            setBulkTierByService({});
+                                        }}
+                                        className="px-3 py-2 rounded-xl"
+                                        style={{
+                                            backgroundColor:
+                                                bulkOccasionId === o.id ? colors.primary + '22' : colors.background,
+                                            borderWidth: 1,
+                                            borderColor: bulkOccasionId === o.id ? colors.primary : colors.border,
+                                        }}
+                                    >
+                                        <Text
+                                            style={{
+                                                color: bulkOccasionId === o.id ? colors.primary : colors.text,
+                                                fontWeight: '600',
+                                                fontSize: 13,
+                                            }}
+                                        >
+                                            {o.name}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+                            <Text className="text-xs font-bold uppercase mb-2" style={{ color: colors.textSecondary }}>
+                                Category
+                            </Text>
+                            {!bulkOccasionId ? (
+                                <Text className="text-xs mb-3" style={{ color: colors.textSecondary }}>
+                                    Choose an occasion first. Categories listed are only those mapped to it.
+                                </Text>
+                            ) : bulkCategoriesLoading ? (
+                                <View className="py-6 mb-4 items-center justify-center">
+                                    <ActivityIndicator size="small" color={colors.primary} />
+                                    <Text className="text-xs mt-3" style={{ color: colors.textSecondary }}>
+                                        Loading categories…
+                                    </Text>
+                                </View>
+                            ) : bulkCategories.length === 0 ? (
+                                <Text className="text-xs mb-3" style={{ color: colors.textSecondary }}>
+                                    Your profile category is not linked to this occasion in the catalog. Try another occasion or update mappings.
+                                </Text>
+                            ) : null}
+                            {!bulkCategoriesLoading ? (
+                                <View className="flex-row flex-wrap gap-2 mb-4">
+                                    {bulkCategories.map((c) => (
+                                        <TouchableOpacity
+                                            key={c.id}
+                                            onPress={() => {
+                                                setBulkCategoryId(c.id);
+                                                setBulkCategoryName(c.name);
+                                                setBulkTierByService({});
+                                            }}
+                                            className="px-3 py-2 rounded-xl"
+                                            style={{
+                                                backgroundColor:
+                                                    bulkCategoryId === c.id ? colors.primary + '22' : colors.background,
+                                                borderWidth: 1,
+                                                borderColor: bulkCategoryId === c.id ? colors.primary : colors.border,
+                                            }}
+                                        >
+                                            <Text
+                                                style={{
+                                                    color: bulkCategoryId === c.id ? colors.primary : colors.text,
+                                                    fontWeight: '600',
+                                                    fontSize: 13,
+                                                }}
+                                            >
+                                                {c.name}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    ))}
+                                </View>
+                            ) : null}
+                            {bulkOccasionId && bulkCategoryId && bulkCatalogServicesLoading ? (
+                                <View className="py-8 mb-2 items-center justify-center">
+                                    <ActivityIndicator size="small" color={colors.primary} />
+                                    <Text className="text-xs mt-3" style={{ color: colors.textSecondary }}>
+                                        Loading catalog services…
+                                    </Text>
+                                </View>
+                            ) : null}
+                            {bulkOccasionId &&
+                            bulkCategoryId &&
+                            !bulkCatalogServicesLoading &&
+                            bulkCatalogServices.length === 0 ? (
+                                <Text className="py-6 text-center" style={{ color: colors.textSecondary }}>
+                                    No catalog services for this combination.
+                                </Text>
+                            ) : null}
+                            {!bulkCatalogServicesLoading
+                                ? bulkCatalogServices.map((svc) => {
+                                const priced = listPricedTiers(svc);
+                                if (priced.length === 0) return null;
+                                return (
+                                    <View
+                                        key={svc.id}
+                                        className="mb-4 p-4 rounded-2xl"
+                                        style={{
+                                            backgroundColor: colors.background,
+                                            borderWidth: 1,
+                                            borderColor: colors.border,
+                                        }}
+                                    >
+                                        <Text className="font-bold" style={{ color: colors.text }}>
+                                            {svc.name}
+                                        </Text>
+                                        <View className="flex-row flex-wrap gap-2 mt-3">
+                                            {priced.map((t) => {
+                                                const sel = bulkTierByService[svc.id]?.has(t.key);
+                                                return (
+                                                    <TouchableOpacity
+                                                        key={t.key}
+                                                        onPress={() => toggleBulkTier(svc.id, t.key)}
+                                                        className="px-2 py-1.5 rounded-lg"
+                                                        style={{
+                                                            backgroundColor: sel ? colors.primary + '20' : colors.surface,
+                                                            borderWidth: 1,
+                                                            borderColor: sel ? colors.primary : colors.border,
+                                                        }}
+                                                    >
+                                                        <Text
+                                                            className="text-xs font-semibold"
+                                                            style={{ color: sel ? colors.primary : colors.text }}
+                                                        >
+                                                            {t.label} ₹{t.price}
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                );
+                                            })}
+                                        </View>
+                                    </View>
+                                );
+                                })
+                                : null}
+                            <TouchableOpacity
+                                onPress={handleBulkSave}
+                                disabled={bulkSaving}
+                                className="py-4 rounded-2xl items-center mt-2 mb-8"
+                                style={{ backgroundColor: colors.primary, opacity: bulkSaving ? 0.7 : 1 }}
+                            >
+                                {bulkSaving ? (
+                                    <ActivityIndicator color="white" />
+                                ) : (
+                                    <Text className="text-white font-bold">Add selected tiers</Text>
+                                )}
+                            </TouchableOpacity>
+                        </ScrollView>
                     </View>
                 </View>
             </Modal>
