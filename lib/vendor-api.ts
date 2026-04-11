@@ -44,7 +44,32 @@ function buildApiUrl(path: string): string {
     return `${base}${path}`;
 }
 
-export async function fetchVendorOrders(status?: string): Promise<{ data: any[] | null; error: string | null }> {
+type VendorOrdersResult = { data: any[] | null; error: string | null };
+type VendorOrdersCacheEntry = { ts: number; value: VendorOrdersResult };
+const VENDOR_ORDERS_CACHE_TTL_MS = 20000;
+const vendorOrdersCache = new Map<string, VendorOrdersCacheEntry>();
+const vendorOrdersInflight = new Map<string, Promise<VendorOrdersResult>>();
+
+function getVendorOrdersCacheKey(status?: string): string {
+    return status && status !== 'all' ? String(status) : 'all';
+}
+
+export async function fetchVendorOrders(
+    status?: string,
+    opts?: { force?: boolean }
+): Promise<VendorOrdersResult> {
+    const cacheKey = getVendorOrdersCacheKey(status);
+    const now = Date.now();
+    if (!opts?.force) {
+        const cached = vendorOrdersCache.get(cacheKey);
+        if (cached && now - cached.ts < VENDOR_ORDERS_CACHE_TTL_MS) {
+            return cached.value;
+        }
+        const inflight = vendorOrdersInflight.get(cacheKey);
+        if (inflight) return inflight;
+    }
+
+    const requestPromise = (async (): Promise<VendorOrdersResult> => {
     const url = buildApiUrl(
         status && status !== 'all'
             ? `/api/vendor/orders?status=${encodeURIComponent(status)}`
@@ -52,6 +77,7 @@ export async function fetchVendorOrders(status?: string): Promise<{ data: any[] 
     );
     if (!url) return { data: null, error: 'API URL not configured' };
 
+    let result: VendorOrdersResult;
     try {
         const headers = await getAuthHeaders();
         const res = await fetch(url, { headers });
@@ -67,7 +93,9 @@ export async function fetchVendorOrders(status?: string): Promise<{ data: any[] 
                 const adminOrdersRes = await fetch(buildApiUrl('/api/admin/orders'), { headers });
                 const adminOrdersData = await adminOrdersRes.json().catch(() => []);
                 if (!adminOrdersRes.ok || !Array.isArray(adminOrdersData)) {
-                    return { data: null, error: 'Failed to load allocated orders' };
+                    result = { data: null, error: 'Failed to load allocated orders' };
+                    vendorOrdersCache.set(cacheKey, { ts: Date.now(), value: result });
+                    return result;
                 }
 
                 const filtered = adminOrdersData.filter((o: any) => {
@@ -91,7 +119,7 @@ export async function fetchVendorOrders(status?: string): Promise<{ data: any[] 
                     for (const q of vendorQuotes) {
                         if (!quoteByOrder.has(q.order_id)) quoteByOrder.set(q.order_id, q);
                     }
-                    return {
+                    result = {
                         data: filtered.map((o: any) => ({
                             ...o,
                             items: Array.isArray(o?.items) ? o.items : [],
@@ -103,8 +131,10 @@ export async function fetchVendorOrders(status?: string): Promise<{ data: any[] 
                         })),
                         error: null,
                     };
+                    vendorOrdersCache.set(cacheKey, { ts: Date.now(), value: result });
+                    return result;
                 } catch {
-                    return {
+                    result = {
                         data: filtered.map((o: any) => ({
                             ...o,
                             items: Array.isArray(o?.items) ? o.items : [],
@@ -116,14 +146,28 @@ export async function fetchVendorOrders(status?: string): Promise<{ data: any[] 
                         })),
                         error: null,
                     };
+                    vendorOrdersCache.set(cacheKey, { ts: Date.now(), value: result });
+                    return result;
                 }
             }
-            return { data: null, error: data?.error || res.statusText };
+            result = { data: null, error: data?.error || res.statusText };
+            vendorOrdersCache.set(cacheKey, { ts: Date.now(), value: result });
+            return result;
         }
-        return { data: Array.isArray(data) ? data : [], error: null };
+        result = { data: Array.isArray(data) ? data : [], error: null };
+        vendorOrdersCache.set(cacheKey, { ts: Date.now(), value: result });
+        return result;
     } catch (e: any) {
-        return { data: null, error: e?.message || 'Network error' };
+        result = { data: null, error: e?.message || 'Network error' };
+        vendorOrdersCache.set(cacheKey, { ts: Date.now(), value: result });
+        return result;
+    } finally {
+        vendorOrdersInflight.delete(cacheKey);
     }
+    })();
+
+    vendorOrdersInflight.set(cacheKey, requestPromise);
+    return requestPromise;
 }
 
 export async function fetchVendorOrderDetail(orderId: string): Promise<{ data: any | null; error: string | null }> {

@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { useTheme } from '../../context/ThemeContext';
 import { useToast } from '../../context/ToastContext';
 import { formatReceiptData } from '../../lib/receipt';
+import { AppScreenSkeleton } from '../../components/AppSkeleton';
 import * as ImagePicker from 'expo-image-picker';
 import { readAsStringAsync } from 'expo-file-system/legacy';
 import DateTimePickerModal from 'react-native-modal-datetime-picker';
@@ -532,11 +533,7 @@ Thank you for choosing Ekatraa!
     };
 
     if (loading) {
-        return (
-            <SafeAreaView edges={['left', 'right']} className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
-                <ActivityIndicator size="large" color="#FF6B00" />
-            </SafeAreaView>
-        );
+        return <AppScreenSkeleton cardCount={4} includeHero={false} />;
     }
 
     return (

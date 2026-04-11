@@ -7,6 +7,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { useToast } from '../../context/ToastContext';
 import { fetchVendorOrderDetail, submitVendorQuotation } from '../../lib/vendor-api';
 import VendorOrderInvoiceModal from '../../components/VendorOrderInvoiceModal';
+import { AppScreenSkeleton } from '../../components/AppSkeleton';
 import { supabase } from '../../lib/supabase';
 import { resolveStorageImageUrl } from '../../lib/storageImageUrl';
 import { getVendorOrderStatusBadge, getVendorOrderBadgeColors } from '../../lib/orderStatusDisplay';
@@ -150,11 +151,7 @@ export default function VendorOrderDetailScreen() {
     };
 
     if (loading) {
-        return (
-            <SafeAreaView className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
-                <ActivityIndicator size="large" color={colors.primary} />
-            </SafeAreaView>
-        );
+        return <AppScreenSkeleton cardCount={3} includeHero={false} />;
     }
 
     if (!order) {

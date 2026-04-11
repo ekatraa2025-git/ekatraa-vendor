@@ -7,6 +7,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { useToast } from '../../context/ToastContext';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { fetchVendorOrders, submitVendorQuotation, requestOrderCompletion, confirmOrderCompletion, requestOrderStart, confirmOrderStart } from '../../lib/vendor-api';
+import { AppScreenSkeleton } from '../../components/AppSkeleton';
 import * as ImagePicker from 'expo-image-picker';
 import { readAsStringAsync } from 'expo-file-system/legacy';
 import DateTimePickerModal from 'react-native-modal-datetime-picker';
@@ -82,13 +83,13 @@ export default function OrdersScreen() {
 
     useFocusEffect(
         useCallback(() => {
-            fetchOrders();
-        }, [filter])
+            fetchOrders({ showLoader: orders.length === 0 });
+        }, [filter, orders.length])
     );
 
     const onRefresh = async () => {
         setRefreshing(true);
-        await Promise.all([fetchOrders(), fetchVendor()]);
+        await Promise.all([fetchOrders({ showLoader: false, force: true }), fetchVendor()]);
         setRefreshing(false);
     };
 
@@ -100,11 +101,12 @@ export default function OrdersScreen() {
         }
     };
 
-    const fetchOrders = async () => {
+    const fetchOrders = async (opts?: { showLoader?: boolean; force?: boolean }) => {
         try {
-            setLoading(true);
+            const showLoader = opts?.showLoader ?? orders.length === 0;
+            if (showLoader) setLoading(true);
             const apiFilter = filter === 'all' ? undefined : filter === 'active' ? undefined : filter;
-            const { data, error } = await fetchVendorOrders(apiFilter);
+            const { data, error } = await fetchVendorOrders(apiFilter, { force: opts?.force === true });
             if (error) {
                 console.warn('[Orders] Fetch error:', error);
                 showToast({ variant: 'error', title: 'Could not load orders', message: error });
@@ -123,7 +125,7 @@ export default function OrdersScreen() {
             console.error('Error fetching orders:', error);
             setOrders([]);
         } finally {
-            setLoading(false);
+            if (opts?.showLoader !== false) setLoading(false);
         }
     };
 
@@ -596,11 +598,7 @@ Thank you for choosing Ekatraa!
     };
 
     if (loading && orders.length === 0) {
-        return (
-            <SafeAreaView edges={['left', 'right']} className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
-                <ActivityIndicator size="large" color={colors.primary} />
-            </SafeAreaView>
-        );
+        return <AppScreenSkeleton cardCount={4} includeHero={false} />;
     }
 
     return (

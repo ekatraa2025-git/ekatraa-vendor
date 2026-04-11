@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Image, RefreshControl } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Image, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { FileText, Plus, ChevronRight, Search, Filter, Clock, CheckCircle2, AlertCircle } from 'lucide-react-native';
@@ -7,6 +7,7 @@ import { supabase } from '../../lib/supabase';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../../context/ThemeContext';
 import BottomNav from '../../components/BottomNav';
+import { AppScreenSkeleton } from '../../components/AppSkeleton';
 
 export default function QuotationsScreen() {
     const router = useRouter();
@@ -76,6 +77,9 @@ export default function QuotationsScreen() {
     };
 
     return (
+        loading && quotations.length === 0 ? (
+            <AppScreenSkeleton cardCount={4} includeHero={false} />
+        ) : (
         <SafeAreaView className="flex-1" style={{ backgroundColor: colors.background }}>
             <View className="px-6 py-4 flex-row justify-between items-center">
                 <View>
@@ -110,11 +114,7 @@ export default function QuotationsScreen() {
                     />
                 }
             >
-                {loading ? (
-                    <View className="py-20">
-                        <ActivityIndicator size="large" color="#FF6B00" />
-                    </View>
-                ) : quotations.length > 0 ? (
+                {quotations.length > 0 ? (
                     quotations.map((item) => (
                         <TouchableOpacity
                             key={item.id}
@@ -209,5 +209,6 @@ export default function QuotationsScreen() {
             {/* Bottom Navigation */}
             <BottomNav />
         </SafeAreaView>
+        )
     );
 }

@@ -11,6 +11,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { useToast } from '../../context/ToastContext';
 import { refreshTranslations } from '../../lib/i18n';
 import { readAsStringAsync } from 'expo-file-system/legacy';
+import { AppScreenSkeleton } from '../../components/AppSkeleton';
 
 const languages = [
     { code: 'en', name: 'English', native: 'English' },
@@ -394,11 +395,7 @@ export default function ProfileScreen() {
     };
 
     if (loading) {
-        return (
-            <SafeAreaView edges={['left', 'right']} className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
-                <ActivityIndicator size="large" color="#FF6B00" />
-            </SafeAreaView>
-        );
+        return <AppScreenSkeleton cardCount={4} includeHero />;
     }
 
     const menuItems = [

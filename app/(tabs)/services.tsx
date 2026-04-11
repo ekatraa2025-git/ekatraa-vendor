@@ -9,6 +9,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { useToast } from '../../context/ToastContext';
 import { readAsStringAsync } from 'expo-file-system/legacy';
 import Constants from 'expo-constants';
+import { AppScreenSkeleton } from '../../components/AppSkeleton';
 
 import * as ImagePicker from 'expo-image-picker';
 import { getTierPrice, listPricedTiers } from '../../lib/catalogTierPricing';
@@ -60,7 +61,7 @@ export default function ServicesScreen() {
     const [occasions, setOccasions] = useState<{ id: string; name: string }[]>([]);
     const [occasionPickerVisible, setOccasionPickerVisible] = useState(false);
     const [bulkModalVisible, setBulkModalVisible] = useState(false);
-    const [bulkOccasionId, setBulkOccasionId] = useState<string>('');
+    const [bulkOccasionIds, setBulkOccasionIds] = useState<string[]>([]);
     const [bulkCategoryId, setBulkCategoryId] = useState<string>('');
     const [bulkCategoryName, setBulkCategoryName] = useState<string>('');
     const [bulkCatalogServices, setBulkCatalogServices] = useState<any[]>([]);
@@ -543,7 +544,7 @@ export default function ServicesScreen() {
             showToast({ variant: 'warning', title: 'Category required', message: 'Set your business category in Profile first.' });
             return;
         }
-        setBulkOccasionId('');
+        setBulkOccasionIds([]);
         setBulkCategoryId('');
         setBulkCategoryName('');
         setBulkCatalogServices([]);
@@ -555,9 +556,9 @@ export default function ServicesScreen() {
     };
 
     useEffect(() => {
-        if (!bulkOccasionId || !vendorCategoryId) {
+        if (bulkOccasionIds.length === 0 || !vendorCategoryId) {
             setBulkCategories([]);
-            if (!bulkOccasionId) {
+            if (bulkOccasionIds.length === 0) {
                 setBulkCategoryId('');
                 setBulkCategoryName('');
             }
@@ -573,30 +574,39 @@ export default function ServicesScreen() {
                 return;
             }
             try {
-                const res = await fetch(
-                    `${apiUrl}/api/public/categories?occasion_id=${encodeURIComponent(bulkOccasionId)}`
-                );
-                if (res.ok) {
-                    const data = await res.json();
-                    if (Array.isArray(data)) {
-                        const mapped = data.map((item: any) => ({
+                const responses = await Promise.all(
+                    bulkOccasionIds.map(async (occasionId) => {
+                        const res = await fetch(
+                            `${apiUrl}/api/public/categories?occasion_id=${encodeURIComponent(occasionId)}`
+                        );
+                        if (!res.ok) return [];
+                        const data = await res.json();
+                        if (!Array.isArray(data)) return [];
+                        return data.map((item: any) => ({
                             id: item.id || String(item.name),
                             name: item.name || String(item.id),
                         }));
-                        const filtered = mapped.filter((c) => categoryMatchesVendor(c.id, c.name));
-                        if (!cancelled) {
-                            setBulkCategories(filtered);
-                            if (filtered.length === 1) {
-                                setBulkCategoryId(filtered[0].id);
-                                setBulkCategoryName(filtered[0].name);
-                            } else {
-                                setBulkCategoryId('');
-                                setBulkCategoryName('');
-                            }
-                        }
+                    })
+                );
+                const merged = responses.flat();
+                const uniqueMap = new Map<string, { id: string; name: string }>();
+                for (const c of merged) {
+                    const key = String(c.id || c.name);
+                    if (!uniqueMap.has(key)) uniqueMap.set(key, c);
+                }
+                const filtered = Array.from(uniqueMap.values()).filter((c) => categoryMatchesVendor(c.id, c.name));
+                if (!cancelled) {
+                    setBulkCategories(filtered);
+                    const stillValid = filtered.find((c) => c.id === bulkCategoryId);
+                    if (stillValid) {
+                        setBulkCategoryName(stillValid.name);
+                    } else if (filtered.length === 1) {
+                        setBulkCategoryId(filtered[0].id);
+                        setBulkCategoryName(filtered[0].name);
+                    } else {
+                        setBulkCategoryId('');
+                        setBulkCategoryName('');
                     }
-                } else if (!cancelled) {
-                    setBulkCategories([]);
                 }
             } catch {
                 if (!cancelled) setBulkCategories([]);
@@ -607,10 +617,10 @@ export default function ServicesScreen() {
         return () => {
             cancelled = true;
         };
-    }, [bulkOccasionId, vendorCategoryId, categoryMatchesVendor]);
+    }, [bulkOccasionIds, vendorCategoryId, categoryMatchesVendor, bulkCategoryId]);
 
     useEffect(() => {
-        if (!bulkOccasionId || !bulkCategoryId) {
+        if (bulkOccasionIds.length === 0 || !bulkCategoryId) {
             setBulkCatalogServices([]);
             setBulkCatalogServicesLoading(false);
             return;
@@ -624,21 +634,24 @@ export default function ServicesScreen() {
                 return;
             }
             try {
-                const url = new URL(`${apiUrl}/api/public/services`);
-                url.searchParams.set('occasion_id', bulkOccasionId);
-                url.searchParams.set('category_id', bulkCategoryId);
-                const res = await fetch(url.toString());
-                if (res.ok) {
-                    const data = await res.json();
-                    const raw = Array.isArray(data) ? data : [];
-                    if (!cancelled) {
-                        setBulkCatalogServices(
-                            raw.filter((s: { category_id?: string }) => s.category_id === bulkCategoryId)
-                        );
-                    }
-                } else if (!cancelled) {
-                    setBulkCatalogServices([]);
+                const responses = await Promise.all(
+                    bulkOccasionIds.map(async (occasionId) => {
+                        const url = new URL(`${apiUrl}/api/public/services`);
+                        url.searchParams.set('occasion_id', occasionId);
+                        url.searchParams.set('category_id', bulkCategoryId);
+                        const res = await fetch(url.toString());
+                        if (!res.ok) return [];
+                        const data = await res.json();
+                        return Array.isArray(data) ? data : [];
+                    })
+                );
+                const merged = responses.flat().filter((s: { category_id?: string }) => s.category_id === bulkCategoryId);
+                const unique = new Map<string, any>();
+                for (const svc of merged) {
+                    const key = String(svc.id || svc.name);
+                    if (!unique.has(key)) unique.set(key, svc);
                 }
+                if (!cancelled) setBulkCatalogServices(Array.from(unique.values()));
             } catch {
                 if (!cancelled) setBulkCatalogServices([]);
             } finally {
@@ -648,7 +661,7 @@ export default function ServicesScreen() {
         return () => {
             cancelled = true;
         };
-    }, [bulkOccasionId, bulkCategoryId]);
+    }, [bulkOccasionIds, bulkCategoryId]);
 
     const toggleBulkTier = (serviceId: string, tierKey: string) => {
         setBulkTierByService((prev) => {
@@ -661,9 +674,20 @@ export default function ServicesScreen() {
         });
     };
 
+    const toggleBulkOccasion = (occasionId: string) => {
+        setBulkOccasionIds((prev) => {
+            const exists = prev.includes(occasionId);
+            const next = exists ? prev.filter((id) => id !== occasionId) : [...prev, occasionId];
+            return next;
+        });
+        setBulkCategoryId('');
+        setBulkCategoryName('');
+        setBulkTierByService({});
+    };
+
     const handleBulkSave = async () => {
-        if (!bulkOccasionId || !bulkCategoryId || !bulkCategoryName) {
-            showToast({ variant: 'warning', title: 'Required', message: 'Select occasion and category.' });
+        if (bulkOccasionIds.length === 0 || !bulkCategoryId || !bulkCategoryName) {
+            showToast({ variant: 'warning', title: 'Required', message: 'Select at least one occasion and a category.' });
             return;
         }
         const { data: { user } } = await supabase.auth.getUser();
@@ -833,6 +857,146 @@ export default function ServicesScreen() {
         );
     };
 
+    const getServiceImages = (svc: any): string[] => {
+        const fromArray = Array.isArray(svc?.image_urls) ? svc.image_urls.filter(Boolean) : [];
+        if (fromArray.length > 0) return fromArray;
+        if (svc?.image_url) return [svc.image_url];
+        return [];
+    };
+
+    const ServiceImageCarousel = ({
+        imageUrls,
+        height = 192,
+    }: {
+        imageUrls: string[];
+        height?: number;
+    }) => {
+        const [resolvedUrls, setResolvedUrls] = useState<string[]>([]);
+        const [loadingCarousel, setLoadingCarousel] = useState(false);
+        const [activeIndex, setActiveIndex] = useState(0);
+        const [containerWidth, setContainerWidth] = useState(320);
+        const depKey = imageUrls.join('|');
+
+        useEffect(() => {
+            let cancelled = false;
+            const raw = (imageUrls || []).filter(Boolean);
+            if (raw.length === 0) {
+                setResolvedUrls([]);
+                setLoadingCarousel(false);
+                setActiveIndex(0);
+                return;
+            }
+            setLoadingCarousel(true);
+            (async () => {
+                try {
+                    const resolved = await Promise.all(
+                        raw.map(async (u) => {
+                            if (u.startsWith('file') || u.startsWith('content')) return u;
+                            const r = await getImageUrl(u);
+                            return r || '';
+                        })
+                    );
+                    if (cancelled) return;
+                    setResolvedUrls(resolved.filter(Boolean));
+                    setActiveIndex(0);
+                } finally {
+                    if (!cancelled) setLoadingCarousel(false);
+                }
+            })();
+            return () => {
+                cancelled = true;
+            };
+        }, [depKey]);
+
+        if (imageUrls.length === 0) {
+            return (
+                <View className="w-full items-center justify-center" style={{ height, backgroundColor: colors.surface }}>
+                    <View className="items-center">
+                        <Store size={40} color={colors.textSecondary} />
+                        <Text className="text-xs mt-2 font-bold" style={{ color: colors.textSecondary }}>No Image</Text>
+                    </View>
+                </View>
+            );
+        }
+
+        if (loadingCarousel && resolvedUrls.length === 0) {
+            return (
+                <View className="w-full items-center justify-center" style={{ height, backgroundColor: colors.surface }}>
+                    <ActivityIndicator size="large" color="#FF6B00" />
+                </View>
+            );
+        }
+
+        if (resolvedUrls.length === 0) {
+            return (
+                <View className="w-full items-center justify-center" style={{ height, backgroundColor: colors.surface }}>
+                    <View className="items-center">
+                        <Store size={40} color={colors.textSecondary} />
+                        <Text className="text-xs mt-2 font-bold" style={{ color: colors.textSecondary }}>Image Not Available</Text>
+                    </View>
+                </View>
+            );
+        }
+
+        return (
+            <View
+                className="w-full relative"
+                style={{ height, backgroundColor: colors.surface }}
+                onLayout={(e) => {
+                    const nextW = e.nativeEvent.layout.width || 0;
+                    if (nextW > 0 && nextW !== containerWidth) setContainerWidth(nextW);
+                }}
+            >
+                <FlatList
+                    data={resolvedUrls}
+                    horizontal
+                    pagingEnabled
+                    bounces={false}
+                    keyExtractor={(u, i) => `${u}-${i}`}
+                    showsHorizontalScrollIndicator={false}
+                    scrollEnabled={resolvedUrls.length > 1}
+                    renderItem={({ item }) => (
+                        <Image
+                            source={{ uri: item }}
+                            style={{ width: containerWidth, height }}
+                            resizeMode="cover"
+                        />
+                    )}
+                    onMomentumScrollEnd={(e) => {
+                        if (!containerWidth) return;
+                        const next = Math.round(e.nativeEvent.contentOffset.x / containerWidth);
+                        setActiveIndex(next);
+                    }}
+                />
+                {resolvedUrls.length > 1 ? (
+                    <>
+                        <View
+                            className="absolute top-3 right-3 px-2 py-1 rounded-full"
+                            style={{ backgroundColor: colors.surface + 'D9' }}
+                        >
+                            <Text className="text-[10px] font-bold" style={{ color: colors.text }}>
+                                {activeIndex + 1}/{resolvedUrls.length}
+                            </Text>
+                        </View>
+                        <View className="absolute bottom-3 w-full flex-row justify-center items-center">
+                            {resolvedUrls.map((_, idx) => (
+                                <View
+                                    key={`dot-${idx}`}
+                                    className="mx-1 rounded-full"
+                                    style={{
+                                        width: idx === activeIndex ? 14 : 7,
+                                        height: 7,
+                                        backgroundColor: idx === activeIndex ? colors.primary : '#FFFFFFB3',
+                                    }}
+                                />
+                            ))}
+                        </View>
+                    </>
+                ) : null}
+            </View>
+        );
+    };
+
     const renderServiceCard = ({ item }: { item: any }) => (
         <TouchableOpacity
             activeOpacity={0.9}
@@ -841,7 +1005,7 @@ export default function ServicesScreen() {
             style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }}
         >
             <View className="relative">
-                <ServiceImage imageUrl={item.image_urls?.[0]} />
+                <ServiceImageCarousel imageUrls={getServiceImages(item)} height={192} />
                 <View className="absolute top-4 right-4 px-3 py-1 rounded-full flex-row items-center" style={{ backgroundColor: colors.surface + 'E6' }}>
                     <Star size={12} color="#FF6B00" fill="#FF6B00" />
                     <Text className="text-[10px] font-bold ml-1" style={{ color: colors.text }}>4.8</Text>
@@ -890,11 +1054,7 @@ export default function ServicesScreen() {
     );
 
     if (loading) {
-        return (
-            <SafeAreaView edges={['left', 'right']} className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
-                <ActivityIndicator size="large" color="#FF6B00" />
-            </SafeAreaView>
-        );
+        return <AppScreenSkeleton cardCount={5} includeHero={false} />;
     }
 
     return (
@@ -1577,7 +1737,7 @@ export default function ServicesScreen() {
                             <View>
                                 <Text className="text-xl font-bold" style={{ color: colors.text }}>Bulk add</Text>
                                 <Text className="text-xs mt-1" style={{ color: colors.textSecondary }}>
-                                    Catalog is limited to your business category from Profile and the occasion you pick.
+                                    Catalog is limited to your business category from Profile and the occasions you pick.
                                 </Text>
                             </View>
                             <TouchableOpacity
@@ -1595,23 +1755,18 @@ export default function ServicesScreen() {
                                 {occasions.map((o) => (
                                     <TouchableOpacity
                                         key={o.id}
-                                        onPress={() => {
-                                            setBulkOccasionId(o.id);
-                                            setBulkCategoryId('');
-                                            setBulkCategoryName('');
-                                            setBulkTierByService({});
-                                        }}
+                                        onPress={() => toggleBulkOccasion(o.id)}
                                         className="px-3 py-2 rounded-xl"
                                         style={{
                                             backgroundColor:
-                                                bulkOccasionId === o.id ? colors.primary + '22' : colors.background,
+                                                bulkOccasionIds.includes(o.id) ? colors.primary + '22' : colors.background,
                                             borderWidth: 1,
-                                            borderColor: bulkOccasionId === o.id ? colors.primary : colors.border,
+                                            borderColor: bulkOccasionIds.includes(o.id) ? colors.primary : colors.border,
                                         }}
                                     >
                                         <Text
                                             style={{
-                                                color: bulkOccasionId === o.id ? colors.primary : colors.text,
+                                                color: bulkOccasionIds.includes(o.id) ? colors.primary : colors.text,
                                                 fontWeight: '600',
                                                 fontSize: 13,
                                             }}
@@ -1624,9 +1779,9 @@ export default function ServicesScreen() {
                             <Text className="text-xs font-bold uppercase mb-2" style={{ color: colors.textSecondary }}>
                                 Category
                             </Text>
-                            {!bulkOccasionId ? (
+                            {bulkOccasionIds.length === 0 ? (
                                 <Text className="text-xs mb-3" style={{ color: colors.textSecondary }}>
-                                    Choose an occasion first. Categories listed are only those mapped to it.
+                                    Choose at least one occasion first. Categories listed are only those mapped to your selection.
                                 </Text>
                             ) : bulkCategoriesLoading ? (
                                 <View className="py-6 mb-4 items-center justify-center">
@@ -1671,7 +1826,7 @@ export default function ServicesScreen() {
                                     ))}
                                 </View>
                             ) : null}
-                            {bulkOccasionId && bulkCategoryId && bulkCatalogServicesLoading ? (
+                            {bulkOccasionIds.length > 0 && bulkCategoryId && bulkCatalogServicesLoading ? (
                                 <View className="py-8 mb-2 items-center justify-center">
                                     <ActivityIndicator size="small" color={colors.primary} />
                                     <Text className="text-xs mt-3" style={{ color: colors.textSecondary }}>
@@ -1679,7 +1834,7 @@ export default function ServicesScreen() {
                                     </Text>
                                 </View>
                             ) : null}
-                            {bulkOccasionId &&
+                            {bulkOccasionIds.length > 0 &&
                             bulkCategoryId &&
                             !bulkCatalogServicesLoading &&
                             bulkCatalogServices.length === 0 ? (
@@ -1760,8 +1915,8 @@ export default function ServicesScreen() {
                     <View className="w-full rounded-[40px] overflow-hidden shadow-2xl" style={{ backgroundColor: colors.surface }}>
                         <View className="relative">
                             <View className="w-full h-64" style={{ backgroundColor: colors.background }}>
-                                {previewServiceData?.image_urls?.[0] ? (
-                                    <ServiceImage imageUrl={previewServiceData.image_urls[0]} />
+                                {getServiceImages(previewServiceData).length > 0 ? (
+                                    <ServiceImageCarousel imageUrls={getServiceImages(previewServiceData)} height={256} />
                                 ) : (
                                     <Image
                                         source={{ uri: 'https://images.unsplash.com/photo-1555244162-803834f70033?q=80&w=400&h=300&auto=format&fit=crop' }}

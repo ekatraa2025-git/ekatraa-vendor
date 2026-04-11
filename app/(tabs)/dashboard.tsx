@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Image, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Image, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { CalendarDays, ChevronRight, LayoutGrid, Sparkles, Store, User } from 'lucide-react-native';
 import QuickHelp from '../../components/QuickHelp';
+import { AppScreenSkeleton } from '../../components/AppSkeleton';
 import { supabase } from '../../lib/supabase';
 import { fetchVendorOrders } from '../../lib/vendor-api';
 import { useTranslation } from 'react-i18next';
@@ -19,18 +20,18 @@ export default function DashboardScreen() {
     const [upcomingBooking, setUpcomingBooking] = useState<any>(null);
 
     useEffect(() => {
-        fetchDashboardData();
+        fetchDashboardData({ showLoader: true, forceOrders: false });
     }, []);
 
     const onRefresh = async () => {
         setRefreshing(true);
-        await fetchDashboardData();
+        await fetchDashboardData({ showLoader: false, forceOrders: true });
         setRefreshing(false);
     };
 
-    const fetchDashboardData = async () => {
+    const fetchDashboardData = async (opts?: { showLoader?: boolean; forceOrders?: boolean }) => {
         try {
-            setLoading(true);
+            if (opts?.showLoader !== false) setLoading(true);
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) {
                 router.replace('/(auth)/login');
@@ -87,7 +88,7 @@ export default function DashboardScreen() {
                 }
 
                 // Fetch orders from backend (allocated orders)
-                const { data: backendOrders } = await fetchVendorOrders();
+                const { data: backendOrders } = await fetchVendorOrders(undefined, { force: opts?.forceOrders === true });
                 const today = new Date().toISOString().split('T')[0];
                 const upcomingList = (backendOrders || [])
                     .filter((o: any) => o.event_date && o.event_date >= today && ['confirmed', 'pending', 'allocated'].includes(o.status || ''))
@@ -99,16 +100,12 @@ export default function DashboardScreen() {
         } catch (error) {
             console.error('Error fetching dashboard data:', error);
         } finally {
-            setLoading(false);
+            if (opts?.showLoader !== false) setLoading(false);
         }
     };
 
     if (loading) {
-        return (
-            <SafeAreaView edges={['left', 'right']} className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
-                <ActivityIndicator size="large" color={colors.primary} />
-            </SafeAreaView>
-        );
+        return <AppScreenSkeleton cardCount={3} includeHero />;
     }
 
     return (

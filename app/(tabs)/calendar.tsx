@@ -6,6 +6,7 @@ import { Clock, AlertCircle, CheckCircle2, ChevronDown, Store } from 'lucide-rea
 import { supabase } from '../../lib/supabase';
 import { fetchVendorOrders } from '../../lib/vendor-api';
 import { useTheme } from '../../context/ThemeContext';
+import { AppScreenSkeleton } from '../../components/AppSkeleton';
 
 export default function CalendarScreen() {
     const { colors, isDarkMode } = useTheme();
@@ -197,11 +198,7 @@ export default function CalendarScreen() {
     };
 
     if (loading) {
-        return (
-            <SafeAreaView edges={['left', 'right']} className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
-                <ActivityIndicator size="large" color="#FF6B00" />
-            </SafeAreaView>
-        );
+        return <AppScreenSkeleton cardCount={3} includeHero={false} />;
     }
 
     return (

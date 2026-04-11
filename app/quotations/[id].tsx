@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Image, Share, Platform } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Image, Share, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ChevronLeft, Calendar, FileText, Download, Share2, CheckCircle2, XCircle, Clock, MapPin, ReceiptText } from 'lucide-react-native';
@@ -9,6 +9,7 @@ import { resolveStorageImageUrl } from '../../lib/storageImageUrl';
 import { useTheme } from '../../context/ThemeContext';
 import { useToast } from '../../context/ToastContext';
 import BottomNav from '../../components/BottomNav';
+import { AppScreenSkeleton } from '../../components/AppSkeleton';
 
 export default function QuotationDetail() {
     const { id } = useLocalSearchParams();
@@ -195,11 +196,7 @@ Thank you for choosing Ekatraa!
     };
 
     if (loading) {
-        return (
-            <SafeAreaView className="flex-1 items-center justify-center" style={{ backgroundColor: colors.background }}>
-                <ActivityIndicator size="large" color="#FF6B00" />
-            </SafeAreaView>
-        );
+        return <AppScreenSkeleton cardCount={3} includeHero={false} />;
     }
 
     if (!quotation) {
