@@ -6,12 +6,14 @@ import { User, Shield, CreditCard, Bell, HelpCircle, LogOut, ChevronRight, Setti
 import QuickHelp from '../../components/QuickHelp';
 import { supabase } from '../../lib/supabase';
 import { resolveStorageImageUrl } from '../../lib/storageImageUrl';
+import { unregisterVendorPushToken } from '../../lib/vendor-api';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../../context/ThemeContext';
 import { useToast } from '../../context/ToastContext';
 import { refreshTranslations } from '../../lib/i18n';
 import { readAsStringAsync } from 'expo-file-system/legacy';
 import { AppScreenSkeleton } from '../../components/AppSkeleton';
+import { getCachedExpoPushToken } from '../../lib/notifications';
 
 const languages = [
     { code: 'en', name: 'English', native: 'English' },
@@ -166,6 +168,10 @@ export default function ProfileScreen() {
 
     const handleLogout = async () => {
         try {
+            const pushToken = getCachedExpoPushToken();
+            if (pushToken) {
+                await unregisterVendorPushToken(pushToken);
+            }
             await supabase.auth.signOut();
             router.replace('/(auth)/login');
         } catch (error) {

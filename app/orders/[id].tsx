@@ -21,6 +21,38 @@ type ServiceMeta = {
     category_name?: string | null;
 };
 
+function parseItemOptions(raw: unknown): Record<string, unknown> {
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        return raw as Record<string, unknown>;
+    }
+    if (typeof raw === 'string') {
+        try {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                return parsed as Record<string, unknown>;
+            }
+        } catch {
+            return {};
+        }
+    }
+    return {};
+}
+
+function prettyTierLabel(options: Record<string, unknown>): string | null {
+    const rawTier =
+        options.tier_label ||
+        options.tierName ||
+        options.tier ||
+        options.selected_tier ||
+        options.pricing_tier;
+    if (typeof rawTier !== 'string' || !rawTier.trim()) return null;
+    const normalized = rawTier.replace(/^price_/, '').replace(/_/g, ' ').trim();
+    return normalized
+        .split(' ')
+        .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : ''))
+        .join(' ');
+}
+
 export default function VendorOrderDetailScreen() {
     const router = useRouter();
     const { id } = useLocalSearchParams<{ id: string }>();
@@ -224,6 +256,9 @@ export default function VendorOrderDetailScreen() {
                 {(order.items || []).map((it: any, idx: number) => {
                     const meta = serviceMetaById[it.service_id] || {};
                     const img = imageUrlByServiceId[it.service_id];
+                    const options = parseItemOptions(it.options);
+                    const tierLabel = prettyTierLabel(options);
+                    const qtyLabel = typeof options.qty_label === 'string' ? options.qty_label : null;
                     return (
                         <View
                             key={it.id || `${it.service_id}-${idx}`}
@@ -250,6 +285,11 @@ export default function VendorOrderDetailScreen() {
                                     <Text className="text-xs mt-1" style={{ color: colors.textSecondary }}>
                                         Qty: {it.quantity} • Unit: ₹{Number(it.unit_price || 0).toLocaleString()}
                                     </Text>
+                                    {tierLabel || qtyLabel ? (
+                                        <Text className="text-xs mt-1" style={{ color: colors.textSecondary }}>
+                                            Tier pricing: {[tierLabel, qtyLabel].filter(Boolean).join(' · ')}
+                                        </Text>
+                                    ) : null}
                                     <Text className="text-sm mt-1 font-semibold" style={{ color: colors.text }}>
                                         Line Total: ₹{(Number(it.quantity || 0) * Number(it.unit_price || 0)).toLocaleString()}
                                     </Text>

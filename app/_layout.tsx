@@ -2,7 +2,7 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import React, { Component, ErrorInfo, ReactNode, useEffect, useState } from "react";
-import { View, Text, TouchableOpacity, AppState, AppStateStatus, LogBox } from "react-native";
+import { View, Text, TouchableOpacity, AppState, AppStateStatus, LogBox, Platform } from "react-native";
 
 /** Dev Client / Expo Go sometimes rejects keep-awake; harmless. Avoid red-box noise. */
 if (__DEV__) {
@@ -12,6 +12,7 @@ import { ThemeProvider, useTheme } from "../context/ThemeContext";
 import { ToastProvider } from "../context/ToastContext";
 import { NotificationProvider } from "../context/NotificationContext";
 import { registerForPushNotificationsAsync } from "../lib/notifications";
+import { registerVendorPushToken } from "../lib/vendor-api";
 import { recoverFromAuthStorageError, supabase } from "../lib/supabase";
 import { loadTranslationsFromBackend, refreshTranslations } from "../lib/i18n";
 
@@ -76,7 +77,12 @@ function AppContent() {
     useEffect(() => {
         // Initialize notifications with timeout
         const notificationTimeout = setTimeout(() => {
-            registerForPushNotificationsAsync().catch((err) => {
+            registerForPushNotificationsAsync().then(async (token) => {
+                if (!token) return;
+                const { data: { session } } = await supabase.auth.getSession();
+                if (!session?.access_token) return;
+                await registerVendorPushToken(token, Platform.OS);
+            }).catch((err) => {
                 console.warn('Notification registration failed:', err);
             });
         }, 1000); // Delay to not block app startup
@@ -107,6 +113,10 @@ function AppContent() {
             const authStateResult = supabase.auth.onAuthStateChange((event: any, session: any) => {
                 if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') {
                     if (session?.user) setVendorId(session.user.id);
+                    registerForPushNotificationsAsync().then(async (token) => {
+                        if (!token || !session?.access_token) return;
+                        await registerVendorPushToken(token, Platform.OS);
+                    }).catch(() => {});
                 } else if (event === 'SIGNED_OUT' || event === 'TOKEN_REFRESH_FAILED') {
                     supabase.auth.signOut({ scope: 'local' }).catch(() => {});
                     setVendorId(null);

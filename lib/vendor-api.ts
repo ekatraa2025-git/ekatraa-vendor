@@ -337,3 +337,48 @@ export async function submitVendorQuotation(payload: SubmitQuotationPayload): Pr
         return { data: null, error: e?.message || 'Network error' };
     }
 }
+
+export async function registerVendorPushToken(
+    expoPushToken: string,
+    platform?: string
+): Promise<{ data: any | null; error: string | null }> {
+    const url = buildApiUrl('/api/vendor/notifications/push-token');
+    if (!url) return { data: null, error: 'API URL not configured' };
+    try {
+        const headers = await getAuthHeaders();
+        const res = await fetch(url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+                expo_push_token: expoPushToken,
+                platform: platform || null,
+                app_id: 'ekatraa-vendor-app',
+            }),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) return { data: null, error: data?.error || res.statusText };
+        return { data, error: null };
+    } catch (e: any) {
+        return { data: null, error: e?.message || 'Network error' };
+    }
+}
+
+export async function unregisterVendorPushToken(
+    expoPushToken: string
+): Promise<{ data: any | null; error: string | null }> {
+    const url = buildApiUrl('/api/vendor/notifications/push-token');
+    if (!url) return { data: null, error: 'API URL not configured' };
+    try {
+        const headers = await getAuthHeaders();
+        const res = await fetch(url, {
+            method: 'DELETE',
+            headers,
+            body: JSON.stringify({ expo_push_token: expoPushToken }),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) return { data: null, error: data?.error || res.statusText };
+        return { data, error: null };
+    } catch (e: any) {
+        return { data: null, error: e?.message || 'Network error' };
+    }
+}

@@ -7,6 +7,7 @@ import { supabase } from './supabase';
 // and doesn't break functionality - notifications work via Supabase real-time
 let Notifications: any = null;
 let notificationsAvailable = false;
+let cachedExpoPushToken: string | null = null;
 
 // Function to safely load notifications module
 function loadNotificationsModule() {
@@ -134,7 +135,12 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
     return null;
   }
 
+  cachedExpoPushToken = token;
   return token;
+}
+
+export function getCachedExpoPushToken(): string | null {
+  return cachedExpoPushToken;
 }
 
 // Setup Supabase real-time subscription for notifications
