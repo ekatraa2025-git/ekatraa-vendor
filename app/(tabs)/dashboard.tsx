@@ -96,6 +96,9 @@ export default function DashboardScreen() {
                 const upcomingOrder = upcomingList[0] || null;
 
                 setUpcomingBooking(upcomingOrder || null);
+            } else {
+                router.replace('/onboarding/index');
+                return;
             }
         } catch (error) {
             console.error('Error fetching dashboard data:', error);

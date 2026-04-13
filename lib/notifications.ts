@@ -8,6 +8,7 @@ import { supabase } from './supabase';
 let Notifications: any = null;
 let notificationsAvailable = false;
 let cachedExpoPushToken: string | null = null;
+let notificationsConfigured = false;
 
 // Function to safely load notifications module
 function loadNotificationsModule() {
@@ -35,20 +36,7 @@ function loadNotificationsModule() {
       Notifications = require('expo-notifications');
       notificationsAvailable = true;
       
-      // Configure notification handler
-      try {
-        Notifications.setNotificationHandler({
-          handleNotification: async () => ({
-            shouldShowAlert: true,
-            shouldPlaySound: true,
-            shouldSetBadge: true,
-            shouldShowBanner: true,
-            shouldShowList: true,
-          }),
-        });
-      } catch (error) {
-        notificationsAvailable = false;
-      }
+      configureNotificationHandler();
     }
 
     // Restore original console.error
@@ -62,6 +50,28 @@ function loadNotificationsModule() {
 
 // Load notifications module lazily when first needed
 loadNotificationsModule();
+
+function configureNotificationHandler() {
+  if (!notificationsAvailable || !Notifications || notificationsConfigured) return;
+  try {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowAlert: true,
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+        shouldShowBanner: true,
+        shouldShowList: true,
+      }),
+    });
+    notificationsConfigured = true;
+  } catch {
+    notificationsConfigured = false;
+  }
+}
+
+export function canUseVendorNotifications(): boolean {
+  return !!notificationsAvailable && !!Notifications;
+}
 
 export interface NotificationData {
   id?: string;
@@ -77,13 +87,14 @@ export interface NotificationData {
 // Request notification permissions
 export async function registerForPushNotificationsAsync(): Promise<string | null> {
   // If notifications are not available (Expo Go on Android), return null
-  if (!notificationsAvailable || !Notifications) {
+  if (!canUseVendorNotifications()) {
     return null;
   }
 
   let token: string | null = null;
 
   try {
+    configureNotificationHandler();
     if (Platform.OS === 'android') {
       try {
         await Notifications.setNotificationChannelAsync('default', {
@@ -141,6 +152,33 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
 
 export function getCachedExpoPushToken(): string | null {
   return cachedExpoPushToken;
+}
+
+export function setupForegroundNotificationListener(
+  onReceive: (notification: { title?: string; message?: string; data?: Record<string, unknown> }) => void
+) {
+  if (!canUseVendorNotifications() || typeof onReceive !== 'function') {
+    return () => {};
+  }
+  try {
+    const subscription = Notifications.addNotificationReceivedListener((event: any) => {
+      const content = event?.request?.content || {};
+      onReceive({
+        title: content?.title,
+        message: content?.body,
+        data: content?.data || {},
+      });
+    });
+    return () => {
+      try {
+        subscription?.remove?.();
+      } catch {
+        /* no-op */
+      }
+    };
+  } catch {
+    return () => {};
+  }
 }
 
 // Setup Supabase real-time subscription for notifications

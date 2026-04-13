@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Image, FlatList, ActivityIndicator, Modal, TextInput, RefreshControl, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
@@ -39,6 +39,36 @@ function looksLikeUuid(value: string): boolean {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+function getOccasionDisplayValue(item: any): string {
+    return String(
+        item?.occasion_name ||
+        item?.occasionName ||
+        item?.occasion ||
+        item?.occasion_id ||
+        item?.occasionId ||
+        ''
+    ).trim();
+}
+
+function isMissingOccasionColumnError(error: any): boolean {
+    const msg = String(error?.message || '').toLowerCase();
+    if (!msg) return false;
+    const mentionsOccasion = msg.includes('occasion_id') || msg.includes('occasion_name');
+    const isColumnIssue =
+        msg.includes('column') ||
+        msg.includes('schema cache') ||
+        msg.includes('does not exist') ||
+        msg.includes('could not find');
+    return mentionsOccasion && isColumnIssue;
+}
+
+function stripOccasionFields<T extends Record<string, any>>(payload: T): T {
+    const next = { ...payload };
+    delete (next as any).occasion_id;
+    delete (next as any).occasion_name;
+    return next;
+}
+
 export default function ServicesScreen() {
     const { colors, isDarkMode } = useTheme();
     const { showToast, showConfirm } = useToast();
@@ -62,8 +92,7 @@ export default function ServicesScreen() {
     const [occasionPickerVisible, setOccasionPickerVisible] = useState(false);
     const [bulkModalVisible, setBulkModalVisible] = useState(false);
     const [bulkOccasionIds, setBulkOccasionIds] = useState<string[]>([]);
-    const [bulkCategoryId, setBulkCategoryId] = useState<string>('');
-    const [bulkCategoryName, setBulkCategoryName] = useState<string>('');
+    const [bulkCategoryIds, setBulkCategoryIds] = useState<string[]>([]);
     const [bulkCatalogServices, setBulkCatalogServices] = useState<any[]>([]);
     /** serviceId -> Set of tier keys */
     const [bulkTierByService, setBulkTierByService] = useState<Record<string, Set<string>>>({});
@@ -71,6 +100,12 @@ export default function ServicesScreen() {
     const [bulkCategoriesLoading, setBulkCategoriesLoading] = useState(false);
     const [bulkCatalogServicesLoading, setBulkCatalogServicesLoading] = useState(false);
     const [bulkSaving, setBulkSaving] = useState(false);
+    const [serviceSearchQuery, setServiceSearchQuery] = useState('');
+    const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
+    const [serviceGalleryUrls, setServiceGalleryUrls] = useState<string[]>([]);
+    const [serviceGallerySigned, setServiceGallerySigned] = useState<Record<string, string>>({});
+    const visibleServiceGalleryRefs = useRef<string[]>([]);
+    const [descriptionOverrides, setDescriptionOverrides] = useState<Record<string, string>>({});
     /** Canonical catalog category id from Profile (vendors.category_id or match on vendors.category name). */
     const [vendorCategoryId, setVendorCategoryId] = useState<string | null>(null);
     const [vendorCategoryLabel, setVendorCategoryLabel] = useState<string>('');
@@ -105,15 +140,21 @@ export default function ServicesScreen() {
             }
             const { data: v } = await supabase
                 .from('vendors')
-                .select('category, category_id')
+                .select('category, category_id, gallery_urls')
                 .eq('id', user.id)
                 .maybeSingle();
 
             if (!v) {
                 setVendorCategoryId(null);
                 setVendorCategoryLabel('');
+                setServiceGalleryUrls([]);
+                setServiceGallerySigned({});
                 return;
             }
+
+            const gallery = Array.isArray((v as any).gallery_urls) ? (v as any).gallery_urls.filter(Boolean) : [];
+            setServiceGalleryUrls(gallery);
+            setServiceGallerySigned({});
 
             const nameFromRow = typeof v.category === 'string' ? v.category.trim() : '';
             const idRaw = v.category_id != null && v.category_id !== '' ? String(v.category_id).trim() : '';
@@ -282,6 +323,54 @@ export default function ServicesScreen() {
         setRefreshing(false);
     };
 
+    const filteredServices = useMemo(() => {
+        const q = serviceSearchQuery.trim().toLowerCase();
+        if (!q) return services;
+        return services.filter((svc) =>
+            String(svc?.name || '').toLowerCase().includes(q) ||
+            String(svc?.category || '').toLowerCase().includes(q) ||
+            String(svc?.pricing_type || '').toLowerCase().includes(q) ||
+            String(svc?.description || '').toLowerCase().includes(q)
+        );
+    }, [services, serviceSearchQuery]);
+
+    const resolveVisibleServiceGallery = useCallback(
+        async (refs: string[]) => {
+            if (!refs.length) return;
+            const pending = refs.filter((ref) => ref && !serviceGallerySigned[ref]);
+            if (!pending.length) return;
+            const resolved = await Promise.all(
+                pending.map(async (ref) => {
+                    try {
+                        const signed = await getImageUrl(ref);
+                        return [ref, signed] as const;
+                    } catch {
+                        return [ref, ref] as const;
+                    }
+                })
+            );
+            setServiceGallerySigned((prev) => {
+                const next = { ...prev };
+                for (const [ref, signed] of resolved) {
+                    if (!next[ref]) next[ref] = signed;
+                }
+                return next;
+            });
+        },
+        [serviceGallerySigned]
+    );
+
+    const handleServiceGalleryViewableItemsChanged = useCallback(
+        ({ viewableItems }: { viewableItems: Array<{ item: string }> }) => {
+            const refs = viewableItems
+                .map((v) => v.item)
+                .filter((item): item is string => !!item && item !== '__add__');
+            visibleServiceGalleryRefs.current = refs;
+            resolveVisibleServiceGallery(refs);
+        },
+        [resolveVisibleServiceGallery]
+    );
+
     const getImageUrl = async (urlOrPath: string | null | undefined): Promise<string> => {
         if (!urlOrPath) return '';
         if (imageUrlCache[urlOrPath]) return imageUrlCache[urlOrPath];
@@ -362,13 +451,110 @@ export default function ServicesScreen() {
                 .order('created_at', { ascending: false });
 
             if (error) throw error;
-            setServices(data || []);
+            const baseRows = data || [];
+
+            // Enrich vendor services with mapped occasions from catalog linkage:
+            // services.offerable_service_id -> service_occasions.service_id -> occasions.name
+            const offerableIds = Array.from(
+                new Set(
+                    baseRows
+                        .map((row: any) => row?.offerable_service_id)
+                        .filter((id: any) => typeof id === 'string' && id.trim().length > 0)
+                )
+            );
+
+            if (offerableIds.length === 0) {
+                setServices(baseRows);
+                return;
+            }
+
+            const descriptionByOfferableId: Record<string, string> = {};
+            const { data: offerableRows } = await supabase
+                .from('offerable_services')
+                .select('id, description')
+                .in('id', offerableIds as string[]);
+            for (const row of offerableRows || []) {
+                const oid = String((row as any)?.id || '');
+                if (!oid) continue;
+                const desc = String((row as any)?.description || '').trim();
+                if (desc) descriptionByOfferableId[oid] = desc;
+            }
+
+            const { data: soRows } = await supabase
+                .from('service_occasions')
+                .select('service_id, occasion_id')
+                .in('service_id', offerableIds as string[]);
+
+            const links = Array.isArray(soRows) ? soRows : [];
+            const occasionIds = Array.from(
+                new Set(
+                    links
+                        .map((row: any) => row?.occasion_id)
+                        .filter((id: any) => typeof id === 'string' && id.trim().length > 0)
+                )
+            );
+
+            const occasionNameById: Record<string, string> = {};
+            if (occasionIds.length > 0) {
+                const { data: occRows } = await supabase
+                    .from('occasions')
+                    .select('id, name')
+                    .in('id', occasionIds as string[]);
+                for (const occ of occRows || []) {
+                    const oid = String((occ as any).id || '');
+                    if (!oid) continue;
+                    occasionNameById[oid] = String((occ as any).name || oid);
+                }
+            }
+
+            const occasionMapByOfferable: Record<string, { ids: Set<string>; names: Set<string> }> = {};
+            for (const link of links) {
+                const serviceId = String((link as any)?.service_id || '');
+                const occasionId = String((link as any)?.occasion_id || '');
+                if (!serviceId || !occasionId) continue;
+                if (!occasionMapByOfferable[serviceId]) {
+                    occasionMapByOfferable[serviceId] = { ids: new Set<string>(), names: new Set<string>() };
+                }
+                occasionMapByOfferable[serviceId].ids.add(occasionId);
+                occasionMapByOfferable[serviceId].names.add(occasionNameById[occasionId] || occasionId);
+            }
+
+            const enriched = baseRows.map((row: any) => {
+                const linked = row?.offerable_service_id ? occasionMapByOfferable[String(row.offerable_service_id)] : null;
+                const serviceId = String(row?.id || '');
+                const hasLocalOverride = serviceId && Object.prototype.hasOwnProperty.call(descriptionOverrides, serviceId);
+                const effectiveDescription = hasLocalOverride
+                    ? descriptionOverrides[serviceId]
+                    : String(row?.description || '').trim() ||
+                      (row?.offerable_service_id ? descriptionByOfferableId[String(row.offerable_service_id)] || '' : '');
+
+                if (!linked) {
+                    return {
+                        ...row,
+                        description: effectiveDescription,
+                    };
+                }
+                const linkedIds = Array.from(linked.ids);
+                const linkedNames = Array.from(linked.names);
+                return {
+                    ...row,
+                    description: effectiveDescription,
+                    occasion_id: row?.occasion_id || (linkedIds.length === 1 ? linkedIds[0] : null),
+                    occasion_name: row?.occasion_name || (linkedNames.length ? linkedNames.join(', ') : null),
+                };
+            });
+
+            setServices(enriched);
         } catch (error) {
             console.error('Error fetching services:', error);
         } finally {
             setLoading(false);
         }
     };
+
+    useEffect(() => {
+        setSelectedServiceIds((prev) => prev.filter((id) => services.some((svc) => svc.id === id)));
+    }, [services]);
 
     const pickImages = async () => {
         const existingCount = Array.isArray(editingService?.image_urls) ? editingService.image_urls.length : 0;
@@ -444,28 +630,72 @@ export default function ServicesScreen() {
                 name: editingService.name,
                 price_amount: parseFloat(editingService.price_amount),
                 category: categoryLabel,
+                description: editingService?.description ? String(editingService.description).trim() : null,
                 is_active: editingService.is_active ?? true,
                 image_urls: imageUrls,
                 vendor_id: user.id
             };
+            if (editingService?.occasion_id) serviceData.occasion_id = editingService.occasion_id;
+            if (editingService?.occasion_name) serviceData.occasion_name = editingService.occasion_name;
             if (editingService.pricing_type) serviceData.pricing_type = editingService.pricing_type;
             if (editingService.offerable_service_id) serviceData.offerable_service_id = editingService.offerable_service_id;
 
             let error;
+            let savedRow: any = null;
             if (isNew) {
-                const { error: insertError } = await supabase
+                let { data: insertData, error: insertError } = await supabase
                     .from('services')
-                    .insert([serviceData]);
+                    .insert([serviceData])
+                    .select('*')
+                    .maybeSingle();
+                if (insertError && isMissingOccasionColumnError(insertError)) {
+                    const fallbackData = stripOccasionFields(serviceData);
+                    const retry = await supabase
+                        .from('services')
+                        .insert([fallbackData])
+                        .select('*')
+                        .maybeSingle();
+                    insertData = retry.data;
+                    insertError = retry.error;
+                }
+                savedRow = insertData;
                 error = insertError;
             } else {
-                const { error: updateError } = await supabase
+                let { data: updateData, error: updateError } = await supabase
                     .from('services')
                     .update(serviceData)
-                    .eq('id', editingService.id);
+                    .eq('id', editingService.id)
+                    .select('*')
+                    .maybeSingle();
+                if (updateError && isMissingOccasionColumnError(updateError)) {
+                    const fallbackData = stripOccasionFields(serviceData);
+                    const retry = await supabase
+                        .from('services')
+                        .update(fallbackData)
+                        .eq('id', editingService.id)
+                        .select('*')
+                        .maybeSingle();
+                    updateData = retry.data;
+                    updateError = retry.error;
+                }
+                savedRow = updateData;
                 error = updateError;
             }
 
             if (error) throw error;
+
+            if (savedRow) {
+                const savedDescription = serviceData.description == null ? '' : String(serviceData.description);
+                setDescriptionOverrides((prev) => ({ ...prev, [savedRow.id]: savedDescription }));
+                setServices((prev) => {
+                    const mergedSaved = { ...savedRow, description: savedDescription };
+                    if (isNew) return [mergedSaved, ...prev];
+                    return prev.map((svc) => (svc.id === savedRow.id ? { ...svc, ...mergedSaved } : svc));
+                });
+                setPreviewServiceData((prev: any) =>
+                    prev?.id === savedRow.id ? { ...prev, ...savedRow, description: savedDescription } : prev
+                );
+            }
 
             setEditModalVisible(false);
             fetchServices();
@@ -496,8 +726,118 @@ export default function ServicesScreen() {
 
                     if (error) throw error;
                     setServices(services.filter(s => s.id !== id));
+                    setSelectedServiceIds((prev) => prev.filter((sid) => sid !== id));
+                    setDescriptionOverrides((prev) => {
+                        const next = { ...prev };
+                        delete next[id];
+                        return next;
+                    });
                 } catch (error) {
                     console.error('Error deleting service:', error);
+                }
+            },
+        });
+    };
+
+    const toggleServiceSelection = (id: string) => {
+        setSelectedServiceIds((prev) => (prev.includes(id) ? prev.filter((sid) => sid !== id) : [...prev, id]));
+    };
+
+    const clearServiceSelection = () => {
+        setSelectedServiceIds([]);
+    };
+
+    const selectAllFilteredServices = () => {
+        setSelectedServiceIds(filteredServices.map((svc) => svc.id));
+    };
+
+    const deleteSelectedServices = () => {
+        if (selectedServiceIds.length === 0) return;
+        showConfirm({
+            title: 'Delete selected services',
+            message: `Delete ${selectedServiceIds.length} selected service(s)?`,
+            confirmLabel: 'Delete',
+            destructive: true,
+            onConfirm: async () => {
+                try {
+                    const { error } = await supabase.from('services').delete().in('id', selectedServiceIds);
+                    if (error) throw error;
+                    setServices((prev) => prev.filter((svc) => !selectedServiceIds.includes(svc.id)));
+                    setSelectedServiceIds([]);
+                    showToast({ variant: 'success', title: 'Deleted', message: 'Selected services deleted.' });
+                } catch (error: any) {
+                    showToast({ variant: 'error', title: 'Delete failed', message: error?.message || 'Could not delete selected services' });
+                }
+            },
+        });
+    };
+
+    const persistServiceGallery = async (next: string[]) => {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+        const { error } = await supabase
+            .from('vendors')
+            .update({ gallery_urls: next })
+            .eq('id', user.id);
+        if (error) throw error;
+        setServiceGalleryUrls(next);
+    };
+
+    const addServiceGalleryImages = async () => {
+        if (serviceGalleryUrls.length >= 12) {
+            showToast({ variant: 'warning', title: 'Limit reached', message: 'You can add up to 12 gallery photos.' });
+            return;
+        }
+        const remaining = Math.max(0, 12 - serviceGalleryUrls.length);
+        const result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: 'images',
+            allowsEditing: false,
+            allowsMultipleSelection: true,
+            selectionLimit: remaining,
+            quality: 0.85,
+        });
+        if (result.canceled) return;
+        try {
+            setUpdating(true);
+            const picked = Array.isArray(result.assets) ? result.assets : [];
+            if (!picked.length) return;
+            const uploadTargets = picked.slice(0, remaining);
+            const uploaded: string[] = [];
+            for (const asset of uploadTargets) {
+                const fileName = await uploadImage(asset.uri, 'service-gallery');
+                if (fileName) uploaded.push(fileName);
+            }
+            const next = [...serviceGalleryUrls, ...uploaded].slice(0, 12);
+            await persistServiceGallery(next);
+            resolveVisibleServiceGallery(visibleServiceGalleryRefs.current);
+            showToast({ variant: 'success', title: 'Gallery updated', message: `${uploaded.length} image(s) added.` });
+        } catch (e: any) {
+            showToast({ variant: 'error', title: 'Upload failed', message: e?.message || 'Could not add images' });
+        } finally {
+            setUpdating(false);
+        }
+    };
+
+    const removeServiceGalleryImage = (ref: string) => {
+        showConfirm({
+            title: 'Remove image',
+            message: 'Remove this image from service gallery?',
+            confirmLabel: 'Remove',
+            destructive: true,
+            onConfirm: async () => {
+                try {
+                    setUpdating(true);
+                    const next = serviceGalleryUrls.filter((u) => u !== ref);
+                    await persistServiceGallery(next);
+                    setServiceGallerySigned((prev) => {
+                        const cloned = { ...prev };
+                        delete cloned[ref];
+                        return cloned;
+                    });
+                } catch (e: any) {
+                    showToast({ variant: 'error', title: 'Could not remove', message: e?.message || 'Could not remove image' });
+                } finally {
+                    setUpdating(false);
                 }
             },
         });
@@ -519,6 +859,7 @@ export default function ServicesScreen() {
         setEditingService({
             name: '',
             price_amount: '',
+            description: '',
             category: '',
             category_id: '',
             occasion_id: '',
@@ -545,8 +886,7 @@ export default function ServicesScreen() {
             return;
         }
         setBulkOccasionIds([]);
-        setBulkCategoryId('');
-        setBulkCategoryName('');
+        setBulkCategoryIds([]);
         setBulkCatalogServices([]);
         setBulkTierByService({});
         setBulkCategories([]);
@@ -559,8 +899,7 @@ export default function ServicesScreen() {
         if (bulkOccasionIds.length === 0 || !vendorCategoryId) {
             setBulkCategories([]);
             if (bulkOccasionIds.length === 0) {
-                setBulkCategoryId('');
-                setBulkCategoryName('');
+                setBulkCategoryIds([]);
             }
             setBulkCategoriesLoading(false);
             return;
@@ -597,16 +936,11 @@ export default function ServicesScreen() {
                 const filtered = Array.from(uniqueMap.values()).filter((c) => categoryMatchesVendor(c.id, c.name));
                 if (!cancelled) {
                     setBulkCategories(filtered);
-                    const stillValid = filtered.find((c) => c.id === bulkCategoryId);
-                    if (stillValid) {
-                        setBulkCategoryName(stillValid.name);
-                    } else if (filtered.length === 1) {
-                        setBulkCategoryId(filtered[0].id);
-                        setBulkCategoryName(filtered[0].name);
-                    } else {
-                        setBulkCategoryId('');
-                        setBulkCategoryName('');
-                    }
+                    const valid = new Set(filtered.map((c) => c.id));
+                    setBulkCategoryIds((prev) => {
+                        const next = prev.filter((id) => valid.has(id));
+                        return next.length ? next : filtered.length === 1 ? [filtered[0].id] : [];
+                    });
                 }
             } catch {
                 if (!cancelled) setBulkCategories([]);
@@ -617,10 +951,10 @@ export default function ServicesScreen() {
         return () => {
             cancelled = true;
         };
-    }, [bulkOccasionIds, vendorCategoryId, categoryMatchesVendor, bulkCategoryId]);
+    }, [bulkOccasionIds, vendorCategoryId, categoryMatchesVendor]);
 
     useEffect(() => {
-        if (bulkOccasionIds.length === 0 || !bulkCategoryId) {
+        if (bulkOccasionIds.length === 0 || bulkCategoryIds.length === 0) {
             setBulkCatalogServices([]);
             setBulkCatalogServicesLoading(false);
             return;
@@ -634,18 +968,24 @@ export default function ServicesScreen() {
                 return;
             }
             try {
-                const responses = await Promise.all(
-                    bulkOccasionIds.map(async (occasionId) => {
-                        const url = new URL(`${apiUrl}/api/public/services`);
-                        url.searchParams.set('occasion_id', occasionId);
-                        url.searchParams.set('category_id', bulkCategoryId);
-                        const res = await fetch(url.toString());
-                        if (!res.ok) return [];
-                        const data = await res.json();
-                        return Array.isArray(data) ? data : [];
-                    })
-                );
-                const merged = responses.flat().filter((s: { category_id?: string }) => s.category_id === bulkCategoryId);
+                const requests: Promise<any[]>[] = [];
+                for (const occasionId of bulkOccasionIds) {
+                    for (const categoryId of bulkCategoryIds) {
+                        requests.push((async () => {
+                            const url = new URL(`${apiUrl}/api/public/services`);
+                            url.searchParams.set('occasion_id', occasionId);
+                            url.searchParams.set('category_id', categoryId);
+                            const res = await fetch(url.toString());
+                            if (!res.ok) return [];
+                            const data = await res.json();
+                            return Array.isArray(data) ? data : [];
+                        })());
+                    }
+                }
+                const responses = await Promise.all(requests);
+                const merged = responses
+                    .flat()
+                    .filter((s: { category_id?: string }) => !!s.category_id && bulkCategoryIds.includes(String(s.category_id)));
                 const unique = new Map<string, any>();
                 for (const svc of merged) {
                     const key = String(svc.id || svc.name);
@@ -661,7 +1001,7 @@ export default function ServicesScreen() {
         return () => {
             cancelled = true;
         };
-    }, [bulkOccasionIds, bulkCategoryId]);
+    }, [bulkOccasionIds, bulkCategoryIds]);
 
     const toggleBulkTier = (serviceId: string, tierKey: string) => {
         setBulkTierByService((prev) => {
@@ -680,21 +1020,68 @@ export default function ServicesScreen() {
             const next = exists ? prev.filter((id) => id !== occasionId) : [...prev, occasionId];
             return next;
         });
-        setBulkCategoryId('');
-        setBulkCategoryName('');
+        setBulkCategoryIds([]);
+        setBulkTierByService({});
+    };
+
+    const toggleBulkCategory = (categoryId: string) => {
+        setBulkCategoryIds((prev) =>
+            prev.includes(categoryId) ? prev.filter((id) => id !== categoryId) : [...prev, categoryId]
+        );
+        setBulkTierByService({});
+    };
+
+    const selectAllBulkOccasions = () => {
+        setBulkOccasionIds(occasions.map((o) => o.id));
+    };
+
+    const clearBulkOccasions = () => {
+        setBulkOccasionIds([]);
+        setBulkCategoryIds([]);
+        setBulkTierByService({});
+    };
+
+    const selectAllBulkCategories = () => {
+        setBulkCategoryIds(bulkCategories.map((c) => c.id));
+        setBulkTierByService({});
+    };
+
+    const clearBulkCategories = () => {
+        setBulkCategoryIds([]);
+        setBulkTierByService({});
+    };
+
+    const selectAllBulkServiceTiers = () => {
+        const next: Record<string, Set<string>> = {};
+        for (const svc of bulkCatalogServices) {
+            const priced = listPricedTiers(svc);
+            if (!priced.length) continue;
+            next[svc.id] = new Set(priced.map((t) => t.key));
+        }
+        setBulkTierByService(next);
+    };
+
+    const clearBulkServiceTiers = () => {
         setBulkTierByService({});
     };
 
     const handleBulkSave = async () => {
-        if (bulkOccasionIds.length === 0 || !bulkCategoryId || !bulkCategoryName) {
+        if (bulkOccasionIds.length === 0 || bulkCategoryIds.length === 0) {
             showToast({ variant: 'warning', title: 'Required', message: 'Select at least one occasion and a category.' });
             return;
         }
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
+        const singleOccasionId = bulkOccasionIds.length === 1 ? bulkOccasionIds[0] : '';
+        const singleOccasionName =
+            singleOccasionId ? occasions.find((o) => o.id === singleOccasionId)?.name || singleOccasionId : '';
+        const bulkCategoryLabelById: Record<string, string> = {};
+        for (const category of bulkCategories) {
+            bulkCategoryLabelById[category.id] = category.name;
+        }
         const rows: any[] = [];
         for (const svc of bulkCatalogServices) {
-            if (svc.category_id !== bulkCategoryId) continue;
+            if (!bulkCategoryIds.includes(String(svc.category_id))) continue;
             const tiers = bulkTierByService[svc.id];
             if (!tiers || tiers.size === 0) continue;
             for (const tk of tiers) {
@@ -703,9 +1090,12 @@ export default function ServicesScreen() {
                 rows.push({
                     name: svc.name,
                     price_amount: price,
-                    category: bulkCategoryName,
+                    category: bulkCategoryLabelById[String(svc.category_id)] || svc.category || 'Service',
+                    occasion_id: svc.occasion_id || singleOccasionId || null,
+                    occasion_name: svc.occasion_name || singleOccasionName || null,
+                    description: svc.description ? String(svc.description).trim() : null,
                     is_active: true,
-                    image_urls: svc.image_url ? [svc.image_url] : [],
+                    image_urls: [],
                     vendor_id: user.id,
                     pricing_type: tk,
                     offerable_service_id: svc.id,
@@ -718,7 +1108,12 @@ export default function ServicesScreen() {
         }
         try {
             setBulkSaving(true);
-            const { error } = await supabase.from('services').insert(rows);
+            let { error } = await supabase.from('services').insert(rows);
+            if (error && isMissingOccasionColumnError(error)) {
+                const fallbackRows = rows.map((row) => stripOccasionFields(row));
+                const retry = await supabase.from('services').insert(fallbackRows);
+                error = retry.error;
+            }
             if (error) throw error;
             setBulkModalVisible(false);
             fetchServices();
@@ -999,58 +1394,93 @@ export default function ServicesScreen() {
 
     const renderServiceCard = ({ item }: { item: any }) => (
         <TouchableOpacity
-            activeOpacity={0.9}
+            activeOpacity={0.88}
             onPress={() => openPreviewModal(item)}
-            className="rounded-[32px] overflow-hidden mb-6 shadow-sm"
+            className="px-3 py-2 mb-2 rounded-lg flex-row items-center"
             style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }}
         >
-            <View className="relative">
-                <ServiceImageCarousel imageUrls={getServiceImages(item)} height={192} />
-                <View className="absolute top-4 right-4 px-3 py-1 rounded-full flex-row items-center" style={{ backgroundColor: colors.surface + 'E6' }}>
-                    <Star size={12} color="#FF6B00" fill="#FF6B00" />
-                    <Text className="text-[10px] font-bold ml-1" style={{ color: colors.text }}>4.8</Text>
-                </View>
-                <View className={`absolute top-4 left-4 ${item.is_active ? 'bg-green-500' : 'bg-gray-400'} px-3 py-1 rounded-full`}>
-                    <Text className="text-white text-[10px] font-bold uppercase">{item.is_active ? 'Active' : 'Inactive'}</Text>
-                </View>
+            <TouchableOpacity
+                onPress={() => toggleServiceSelection(item.id)}
+                className="w-7 h-7 rounded-full items-center justify-center mr-3"
+                style={{
+                    backgroundColor: selectedServiceIds.includes(item.id) ? colors.primary : colors.background,
+                    borderWidth: 1,
+                    borderColor: selectedServiceIds.includes(item.id) ? colors.primary : colors.border,
+                }}
+            >
+                {selectedServiceIds.includes(item.id) ? <Check size={14} color="white" /> : null}
+            </TouchableOpacity>
+            <View className="flex-1 mr-3">
+                <Text numberOfLines={1} className="text-sm font-semibold" style={{ color: colors.text }}>
+                    {item.name}
+                </Text>
+                <Text numberOfLines={1} className="text-[11px] mt-0.5" style={{ color: colors.textSecondary }}>
+                    {item.category || 'Service'} • {item.pricing_type ? getPricingTierLabel(item.pricing_type) : 'Custom'} • ₹{item.price_amount}
+                </Text>
+                <Text numberOfLines={1} className="text-[11px] mt-0.5" style={{ color: colors.textSecondary }}>
+                    {getOccasionDisplayValue(item) ? `Occasion: ${getOccasionDisplayValue(item)}` : ''}
+                </Text>
             </View>
-
-            <View className="p-6">
-                <View className="flex-row justify-between items-start">
-                    <View className="flex-1 mr-4">
-                        <Text className="text-[10px] uppercase font-bold tracking-widest" style={{ color: colors.textSecondary }}>{item.category || 'Service'}</Text>
-                        <Text className="text-xl font-bold mt-1" numberOfLines={1} style={{ color: colors.text }}>{item.name}</Text>
-                    </View>
-                    <Text className="font-bold text-lg" style={{ color: colors.primary }}>₹{item.price_amount}</Text>
-                </View>
-
-                <View className="flex-row items-center mt-6 pt-6" style={{ borderTopWidth: 1, borderTopColor: colors.border }}>
-                    <TouchableOpacity
-                        onPress={() => openEditModal(item)}
-                        className="flex-1 flex-row items-center justify-center py-2"
-                    >
-                        <Edit3 size={18} color={colors.textSecondary} />
-                        <Text className="font-semibold ml-2" style={{ color: colors.textSecondary }}>Edit</Text>
-                    </TouchableOpacity>
-                    <View className="w-[1px] h-6" style={{ backgroundColor: colors.border }} />
-                    <TouchableOpacity
-                        onPress={() => openPreviewModal(item)}
-                        className="flex-1 flex-row items-center justify-center py-2"
-                    >
-                        <Eye size={18} color={colors.textSecondary} />
-                        <Text className="font-semibold ml-2" style={{ color: colors.textSecondary }}>Preview</Text>
-                    </TouchableOpacity>
-                    <View className="w-[1px] h-6" style={{ backgroundColor: colors.border }} />
-                    <TouchableOpacity
-                        onPress={() => deleteService(item.id)}
-                        className="flex-1 flex-row items-center justify-center py-2"
-                    >
-                        <Trash2 size={18} color="#EF4444" />
-                        <Text className="font-semibold ml-2" style={{ color: '#EF4444' }}>Delete</Text>
-                    </TouchableOpacity>
-                </View>
-            </View>
+            <TouchableOpacity onPress={() => openEditModal(item)} className="p-2 mr-1">
+                <Edit3 size={16} color={colors.textSecondary} />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => deleteService(item.id)} className="p-2">
+                <Trash2 size={16} color="#EF4444" />
+            </TouchableOpacity>
         </TouchableOpacity>
+    );
+
+    const renderServiceGallery = () => (
+        <View className="mt-3 rounded-2xl p-4" style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }}>
+            <View className="flex-row items-center justify-between mb-2">
+                <Text className="font-bold" style={{ color: colors.text }}>Service Gallery</Text>
+                <Text className="text-xs" style={{ color: colors.textSecondary }}>{serviceGalleryUrls.length}/12</Text>
+            </View>
+            <Text className="text-xs mb-3" style={{ color: colors.textSecondary }}>
+                Add shared images for your service catalogue (same style as profile gallery).
+            </Text>
+            <FlatList
+                horizontal
+                data={[...serviceGalleryUrls, '__add__']}
+                keyExtractor={(item, i) => (item === '__add__' ? 'service-gallery-add' : `${item}-${i}`)}
+                showsHorizontalScrollIndicator={false}
+                onViewableItemsChanged={handleServiceGalleryViewableItemsChanged}
+                viewabilityConfig={{ itemVisiblePercentThreshold: 30 }}
+                renderItem={({ item }) => {
+                    if (item === '__add__') {
+                        return (
+                            <TouchableOpacity
+                                onPress={addServiceGalleryImages}
+                                disabled={updating || serviceGalleryUrls.length >= 12}
+                                className="w-24 h-24 rounded-2xl mr-3 border-2 border-dashed items-center justify-center"
+                                style={{ borderColor: colors.border, opacity: serviceGalleryUrls.length >= 12 ? 0.4 : 1 }}
+                            >
+                                <Plus size={24} color={colors.primary} />
+                                <Text className="text-[10px] font-bold mt-1" style={{ color: colors.textSecondary }}>Add</Text>
+                            </TouchableOpacity>
+                        );
+                    }
+                    const uri = serviceGallerySigned[item] || item;
+                    return (
+                        <View className="mr-3 relative">
+                            {serviceGallerySigned[item] ? (
+                                <Image source={{ uri }} className="w-24 h-24 rounded-2xl" style={{ backgroundColor: colors.background }} />
+                            ) : (
+                                <View className="w-24 h-24 rounded-2xl items-center justify-center" style={{ backgroundColor: colors.background }}>
+                                    <ActivityIndicator size="small" color={colors.primary} />
+                                </View>
+                            )}
+                            <TouchableOpacity
+                                onPress={() => removeServiceGalleryImage(item)}
+                                className="absolute -top-1 -right-1 w-7 h-7 rounded-full bg-red-500 items-center justify-center"
+                            >
+                                <X size={14} color="#fff" />
+                            </TouchableOpacity>
+                        </View>
+                    );
+                }}
+            />
+        </View>
     );
 
     if (loading) {
@@ -1089,10 +1519,63 @@ export default function ServicesScreen() {
                         </TouchableOpacity>
                     </View>
                 </View>
+                <View className="mt-3 rounded-2xl px-3 py-2 flex-row items-center" style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }}>
+                    <TextInput
+                        className="flex-1"
+                        value={serviceSearchQuery}
+                        onChangeText={setServiceSearchQuery}
+                        placeholder="Filter services by name, category, tier"
+                        placeholderTextColor={colors.textSecondary}
+                        style={{ color: colors.text, fontWeight: '600', paddingVertical: 4 }}
+                    />
+                    {serviceSearchQuery.trim().length > 0 ? (
+                        <TouchableOpacity
+                            onPress={() => setServiceSearchQuery('')}
+                            className="ml-2 w-7 h-7 rounded-full items-center justify-center"
+                            style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }}
+                        >
+                            <X size={14} color={colors.textSecondary} />
+                        </TouchableOpacity>
+                    ) : null}
+                </View>
+                <View className="mt-3 rounded-2xl p-3 flex-row items-center justify-between" style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }}>
+                    <Text className="text-xs font-semibold" style={{ color: colors.textSecondary }}>
+                        {selectedServiceIds.length > 0 ? `${selectedServiceIds.length} selected` : `${filteredServices.length} shown`}
+                    </Text>
+                    <View className="flex-row gap-2">
+                        <TouchableOpacity
+                            onPress={deleteSelectedServices}
+                            disabled={selectedServiceIds.length === 0}
+                            className="px-3 py-1.5 rounded-lg"
+                            style={{
+                                backgroundColor: '#FEE2E2',
+                                borderWidth: 1,
+                                borderColor: '#FECACA',
+                                opacity: selectedServiceIds.length === 0 ? 0.45 : 1,
+                            }}
+                        >
+                            <Text className="text-xs font-semibold" style={{ color: '#DC2626' }}>Delete selected</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            onPress={selectAllFilteredServices}
+                            className="px-3 py-1.5 rounded-lg"
+                            style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }}
+                        >
+                            <Text className="text-xs font-semibold" style={{ color: colors.text }}>Select all</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            onPress={clearServiceSelection}
+                            className="px-3 py-1.5 rounded-lg"
+                            style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }}
+                        >
+                            <Text className="text-xs font-semibold" style={{ color: colors.textSecondary }}>Unselect all</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
             </View>
 
             <FlatList
-                data={services}
+                data={filteredServices}
                 renderItem={renderServiceCard}
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={{ padding: 24, paddingBottom: 120 }}
@@ -1111,7 +1594,9 @@ export default function ServicesScreen() {
                 }
                 ListEmptyComponent={() => (
                     <View className="flex-1 items-center justify-center py-20">
-                        <Text className="font-medium" style={{ color: colors.textSecondary }}>No services found</Text>
+                        <Text className="font-medium" style={{ color: colors.textSecondary }}>
+                            {services.length > 0 ? 'No services match your filter' : 'No services found'}
+                        </Text>
                         <TouchableOpacity
                             onPress={openAddModal}
                             className="mt-4 bg-primary px-6 py-3 rounded-xl"
@@ -1120,19 +1605,7 @@ export default function ServicesScreen() {
                         </TouchableOpacity>
                     </View>
                 )}
-                ListHeaderComponent={() => services.length > 0 ? (
-                    <TouchableOpacity
-                        onPress={openAddModal}
-                        className="rounded-3xl p-6 mb-8 flex-row items-center"
-                        style={{ backgroundColor: colors.surface }}
-                    >
-                        <View className="flex-1">
-                            <Text className="font-bold text-lg" style={{ color: colors.text }}>Add New Listing</Text>
-                            <Text className="text-xs mt-1" style={{ color: colors.textSecondary }}>Increase your reach by adding more items</Text>
-                        </View>
-                        <ChevronRight size={20} color="#FF6B00" />
-                    </TouchableOpacity>
-                ) : null}
+                ListFooterComponent={renderServiceGallery}
             />
 
             {/* Edit Modal */}
@@ -1157,75 +1630,6 @@ export default function ServicesScreen() {
 
                         <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
                             <View className="space-y-6">
-                                <TouchableOpacity
-                                    onPress={pickImages}
-                                    className="border-2 border-dashed rounded-[32px] overflow-hidden mb-6 items-center justify-center h-48"
-                                    style={{ backgroundColor: colors.background, borderColor: colors.border }}
-                                >
-                                    {selectedImages[0] ? (
-                                        <Image
-                                            source={{ uri: selectedImages[0] }}
-                                            className="w-full h-full"
-                                            onError={(e) => console.error('[IMAGE LOAD ERROR] Modal Preview:', e.nativeEvent.error, 'URI:', selectedImages[0])}
-                                        />
-                                    ) : editingService?.image_urls?.[0] ? (
-                                        <ServiceImage imageUrl={editingService.image_urls[0]} />
-                                    ) : (
-                                        <View className="items-center">
-                                            <Plus size={32} color={colors.textSecondary} />
-                                            <Text className="mt-2 font-bold text-xs uppercase tracking-widest" style={{ color: colors.textSecondary }}>Add Photos</Text>
-                                        </View>
-                                    )}
-                                </TouchableOpacity>
-                                <Text className="text-[11px] mb-3" style={{ color: colors.textSecondary }}>
-                                    Upload multiple service photos (max 12). First image is used as cover.
-                                </Text>
-                                {Array.isArray(editingService?.image_urls) && editingService.image_urls.length > 0 ? (
-                                    <View className="mb-3">
-                                        <Text className="text-xs font-bold mb-2 uppercase tracking-widest" style={{ color: colors.textSecondary }}>
-                                            Existing photos
-                                        </Text>
-                                        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                                            {editingService.image_urls.map((uri: string, idx: number) => (
-                                                <View key={`${uri}-${idx}`} className="mr-3 relative">
-                                                    <ServiceThumb imageUrl={uri} />
-                                                    <TouchableOpacity
-                                                        onPress={() =>
-                                                            setEditingService({
-                                                                ...editingService,
-                                                                image_urls: (editingService.image_urls || []).filter((_: string, i: number) => i !== idx),
-                                                            })
-                                                        }
-                                                        className="absolute top-2 right-2 w-7 h-7 rounded-full bg-red-500 items-center justify-center"
-                                                    >
-                                                        <X size={14} color="#fff" />
-                                                    </TouchableOpacity>
-                                                </View>
-                                            ))}
-                                        </ScrollView>
-                                    </View>
-                                ) : null}
-                                {selectedImages.length > 0 ? (
-                                    <View className="mb-4">
-                                        <Text className="text-xs font-bold mb-2 uppercase tracking-widest" style={{ color: colors.textSecondary }}>
-                                            New photos to upload
-                                        </Text>
-                                        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                                            {selectedImages.map((uri, idx) => (
-                                                <View key={`${uri}-${idx}`} className="mr-3 relative">
-                                                    <Image source={{ uri }} className="w-24 h-24 rounded-2xl" />
-                                                    <TouchableOpacity
-                                                        onPress={() => setSelectedImages((prev) => prev.filter((_, i) => i !== idx))}
-                                                        className="absolute -top-1 -right-1 w-7 h-7 rounded-full bg-red-500 items-center justify-center"
-                                                    >
-                                                        <X size={14} color="#fff" />
-                                                    </TouchableOpacity>
-                                                </View>
-                                            ))}
-                                        </ScrollView>
-                                    </View>
-                                ) : null}
-
                                 {isNew ? (
                                     <>
                                         <View>
@@ -1311,6 +1715,21 @@ export default function ServicesScreen() {
                                                 </Text>
                                             </View>
                                         ) : null}
+                                        <View className="mt-4">
+                                            <Text className="text-sm font-bold mb-2 uppercase tracking-widest text-[10px]" style={{ color: colors.text }}>
+                                                Description
+                                            </Text>
+                                            <TextInput
+                                                value={editingService?.description || ''}
+                                                onChangeText={(t) => setEditingService({ ...editingService, description: t })}
+                                                multiline
+                                                numberOfLines={4}
+                                                className="rounded-2xl px-4 py-4 font-semibold"
+                                                style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, color: colors.text, minHeight: 96, textAlignVertical: 'top' }}
+                                                placeholder="Add service description"
+                                                placeholderTextColor={colors.textSecondary}
+                                            />
+                                        </View>
                                     </>
                                 ) : (
                                     <>
@@ -1349,6 +1768,21 @@ export default function ServicesScreen() {
                                                 className="rounded-2xl px-4 py-4 font-semibold"
                                                 style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, color: colors.text }}
                                                 placeholder="Enter price"
+                                                placeholderTextColor={colors.textSecondary}
+                                            />
+                                        </View>
+                                        <View className="mt-4">
+                                            <Text className="text-sm font-bold mb-2 uppercase tracking-widest text-[10px]" style={{ color: colors.text }}>
+                                                Description
+                                            </Text>
+                                            <TextInput
+                                                value={editingService?.description || ''}
+                                                onChangeText={(t) => setEditingService({ ...editingService, description: t })}
+                                                multiline
+                                                numberOfLines={4}
+                                                className="rounded-2xl px-4 py-4 font-semibold"
+                                                style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, color: colors.text, minHeight: 96, textAlignVertical: 'top' }}
+                                                placeholder="Add service description"
                                                 placeholderTextColor={colors.textSecondary}
                                             />
                                         </View>
@@ -1615,7 +2049,14 @@ export default function ServicesScreen() {
                                 renderItem={({ item }) => (
                                     <TouchableOpacity
                                         onPress={() => {
-                                            setEditingService({ ...editingService, name: item.name, offerable_service_id: item.id, price_amount: '', pricing_type: '' });
+                                            setEditingService({
+                                                ...editingService,
+                                                name: item.name,
+                                                description: item?.description ? String(item.description) : (editingService?.description || ''),
+                                                offerable_service_id: item.id,
+                                                price_amount: '',
+                                                pricing_type: '',
+                                            });
                                             setSelectedCatalogService(item);
                                             setCatalogServicePickerVisible(false);
                                         }}
@@ -1751,6 +2192,22 @@ export default function ServicesScreen() {
                             <Text className="text-xs font-bold uppercase mb-2" style={{ color: colors.textSecondary }}>
                                 Occasion
                             </Text>
+                            <View className="flex-row gap-2 mb-3">
+                                <TouchableOpacity
+                                    onPress={selectAllBulkOccasions}
+                                    className="px-3 py-1.5 rounded-lg"
+                                    style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }}
+                                >
+                                    <Text className="text-xs font-semibold" style={{ color: colors.text }}>Select all</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    onPress={clearBulkOccasions}
+                                    className="px-3 py-1.5 rounded-lg"
+                                    style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }}
+                                >
+                                    <Text className="text-xs font-semibold" style={{ color: colors.textSecondary }}>Clear</Text>
+                                </TouchableOpacity>
+                            </View>
                             <View className="flex-row flex-wrap gap-2 mb-4">
                                 {occasions.map((o) => (
                                     <TouchableOpacity
@@ -1779,6 +2236,23 @@ export default function ServicesScreen() {
                             <Text className="text-xs font-bold uppercase mb-2" style={{ color: colors.textSecondary }}>
                                 Category
                             </Text>
+                            <View className="flex-row gap-2 mb-3">
+                                <TouchableOpacity
+                                    onPress={selectAllBulkCategories}
+                                    disabled={bulkCategories.length === 0}
+                                    className="px-3 py-1.5 rounded-lg"
+                                    style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, opacity: bulkCategories.length === 0 ? 0.5 : 1 }}
+                                >
+                                    <Text className="text-xs font-semibold" style={{ color: colors.text }}>Select all</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    onPress={clearBulkCategories}
+                                    className="px-3 py-1.5 rounded-lg"
+                                    style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }}
+                                >
+                                    <Text className="text-xs font-semibold" style={{ color: colors.textSecondary }}>Clear</Text>
+                                </TouchableOpacity>
+                            </View>
                             {bulkOccasionIds.length === 0 ? (
                                 <Text className="text-xs mb-3" style={{ color: colors.textSecondary }}>
                                     Choose at least one occasion first. Categories listed are only those mapped to your selection.
@@ -1800,22 +2274,18 @@ export default function ServicesScreen() {
                                     {bulkCategories.map((c) => (
                                         <TouchableOpacity
                                             key={c.id}
-                                            onPress={() => {
-                                                setBulkCategoryId(c.id);
-                                                setBulkCategoryName(c.name);
-                                                setBulkTierByService({});
-                                            }}
+                                            onPress={() => toggleBulkCategory(c.id)}
                                             className="px-3 py-2 rounded-xl"
                                             style={{
                                                 backgroundColor:
-                                                    bulkCategoryId === c.id ? colors.primary + '22' : colors.background,
+                                                    bulkCategoryIds.includes(c.id) ? colors.primary + '22' : colors.background,
                                                 borderWidth: 1,
-                                                borderColor: bulkCategoryId === c.id ? colors.primary : colors.border,
+                                                borderColor: bulkCategoryIds.includes(c.id) ? colors.primary : colors.border,
                                             }}
                                         >
                                             <Text
                                                 style={{
-                                                    color: bulkCategoryId === c.id ? colors.primary : colors.text,
+                                                    color: bulkCategoryIds.includes(c.id) ? colors.primary : colors.text,
                                                     fontWeight: '600',
                                                     fontSize: 13,
                                                 }}
@@ -1826,7 +2296,7 @@ export default function ServicesScreen() {
                                     ))}
                                 </View>
                             ) : null}
-                            {bulkOccasionIds.length > 0 && bulkCategoryId && bulkCatalogServicesLoading ? (
+                            {bulkOccasionIds.length > 0 && bulkCategoryIds.length > 0 && bulkCatalogServicesLoading ? (
                                 <View className="py-8 mb-2 items-center justify-center">
                                     <ActivityIndicator size="small" color={colors.primary} />
                                     <Text className="text-xs mt-3" style={{ color: colors.textSecondary }}>
@@ -1835,12 +2305,30 @@ export default function ServicesScreen() {
                                 </View>
                             ) : null}
                             {bulkOccasionIds.length > 0 &&
-                            bulkCategoryId &&
+                            bulkCategoryIds.length > 0 &&
                             !bulkCatalogServicesLoading &&
                             bulkCatalogServices.length === 0 ? (
                                 <Text className="py-6 text-center" style={{ color: colors.textSecondary }}>
                                     No catalog services for this combination.
                                 </Text>
+                            ) : null}
+                            {bulkCatalogServices.length > 0 ? (
+                                <View className="flex-row gap-2 mb-3">
+                                    <TouchableOpacity
+                                        onPress={selectAllBulkServiceTiers}
+                                        className="px-3 py-1.5 rounded-lg"
+                                        style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }}
+                                    >
+                                        <Text className="text-xs font-semibold" style={{ color: colors.text }}>Select all services & tiers</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        onPress={clearBulkServiceTiers}
+                                        className="px-3 py-1.5 rounded-lg"
+                                        style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }}
+                                    >
+                                        <Text className="text-xs font-semibold" style={{ color: colors.textSecondary }}>Clear</Text>
+                                    </TouchableOpacity>
+                                </View>
                             ) : null}
                             {!bulkCatalogServicesLoading
                                 ? bulkCatalogServices.map((svc) => {
@@ -1913,23 +2401,13 @@ export default function ServicesScreen() {
             >
                 <View className="flex-1 justify-center items-center bg-black/70 px-6">
                     <View className="w-full rounded-[40px] overflow-hidden shadow-2xl" style={{ backgroundColor: colors.surface }}>
-                        <View className="relative">
-                            <View className="w-full h-64" style={{ backgroundColor: colors.background }}>
-                                {getServiceImages(previewServiceData).length > 0 ? (
-                                    <ServiceImageCarousel imageUrls={getServiceImages(previewServiceData)} height={256} />
-                                ) : (
-                                    <Image
-                                        source={{ uri: 'https://images.unsplash.com/photo-1555244162-803834f70033?q=80&w=400&h=300&auto=format&fit=crop' }}
-                                        className="w-full h-full"
-                                        resizeMode="cover"
-                                    />
-                                )}
-                            </View>
+                        <View className="flex-row justify-end p-5 pb-0">
                             <TouchableOpacity
                                 onPress={() => setPreviewModalVisible(false)}
-                                className="absolute top-6 right-6 w-10 h-10 bg-black/50 rounded-full items-center justify-center"
+                                className="w-10 h-10 rounded-full items-center justify-center"
+                                style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }}
                             >
-                                <X size={20} color="white" />
+                                <X size={20} color={colors.text} />
                             </TouchableOpacity>
                         </View>
                         <View className="p-8">
@@ -1941,15 +2419,24 @@ export default function ServicesScreen() {
                                 <View className="bg-primary/10 px-4 py-1.5 rounded-full mr-3">
                                     <Text className="text-primary font-bold text-xs uppercase">{previewServiceData?.category || 'Service'}</Text>
                                 </View>
+                                <View className="px-4 py-1.5 rounded-full mr-3" style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }}>
+                                    <Text className="font-bold text-xs" style={{ color: colors.textSecondary }}>
+                                        {getOccasionDisplayValue(previewServiceData)}
+                                    </Text>
+                                </View>
                                 <View className="flex-row items-center">
                                     <Star size={14} color="#FF6B00" fill="#FF6B00" />
                                     <Text className="text-sm font-bold ml-1" style={{ color: colors.text }}>4.8 (120 reviews)</Text>
                                 </View>
                             </View>
-                            <Text className="text-sm leading-6 mb-8" style={{ color: colors.textSecondary }}>
-                                High-quality {previewServiceData?.category?.toLowerCase() || 'service'} provided by Ekatraa verified partners.
-                                Book now to ensure availability for your special event.
-                            </Text>
+                            <View className="rounded-2xl p-4 mb-8" style={{ backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }}>
+                                <Text className="text-[11px] uppercase font-bold tracking-widest mb-2" style={{ color: colors.textSecondary }}>
+                                    Description
+                                </Text>
+                                <Text className="text-sm leading-6" style={{ color: colors.textSecondary }}>
+                                    {previewServiceData?.description?.trim() || ''}
+                                </Text>
+                            </View>
                             <TouchableOpacity
                                 onPress={() => setPreviewModalVisible(false)}
                                 className="w-full py-5 items-center justify-center bg-black rounded-3xl"

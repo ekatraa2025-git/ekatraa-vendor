@@ -6,6 +6,8 @@ import { ChevronLeft, CheckCircle2 } from 'lucide-react-native';
 import { recoverFromAuthStorageError, supabase } from '../../lib/supabase';
 import { useTheme } from '../../context/ThemeContext';
 import { useToast } from '../../context/ToastContext';
+import { registerForPushNotificationsAsync } from '../../lib/notifications';
+import { registerVendorPushToken } from '../../lib/vendor-api';
 
 export default function OTPScreen() {
     const router = useRouter();
@@ -16,6 +18,7 @@ export default function OTPScreen() {
     const [loading, setLoading] = useState(false);
     const [resendCooldown, setResendCooldown] = useState(60);
     const [resendLoading, setResendLoading] = useState(false);
+    const autoVerifyTriggeredRef = useRef(false);
 
 
 
@@ -71,11 +74,16 @@ export default function OTPScreen() {
                 return;
             }
 
+            const pushToken = await registerForPushNotificationsAsync();
+            if (pushToken) {
+                await registerVendorPushToken(pushToken, Platform.OS);
+            }
+
             const { data: vendor } = await supabase
                 .from('vendors')
                 .select('*')
                 .eq('id', user.id)
-                .single();
+                .maybeSingle();
 
             if (vendor) {
                 router.replace('/(tabs)/dashboard');
@@ -97,6 +105,20 @@ export default function OTPScreen() {
         const timer = setTimeout(() => setResendCooldown(c => c - 1), 1000);
         return () => clearTimeout(timer);
     }, [resendCooldown]);
+
+    useEffect(() => {
+        const otpString = otp.join('');
+        const complete = otpString.length === 6 && /^\d{6}$/.test(otpString);
+        if (!complete) {
+            autoVerifyTriggeredRef.current = false;
+            return;
+        }
+        if (loading || autoVerifyTriggeredRef.current) return;
+        autoVerifyTriggeredRef.current = true;
+        handleVerify().catch(() => {
+            autoVerifyTriggeredRef.current = false;
+        });
+    }, [otp, loading]);
 
     const handleResend = async () => {
         if (resendCooldown > 0 || resendLoading) return;
@@ -156,9 +178,10 @@ export default function OTPScreen() {
                                 setOtp(newOtp);
                             }}
                             textContentType="oneTimeCode"
-                            autoComplete="sms-otp"
+                            autoComplete={Platform.OS === 'android' ? 'sms-otp' : 'one-time-code'}
                             autoFocus={true}
                             editable={!loading}
+                            importantForAutofill="yes"
                         />
                         {/* Visual OTP Digits */}
                         <View className="flex-row justify-between w-full h-full">

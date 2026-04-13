@@ -356,12 +356,6 @@ export default function OnboardingScreen() {
                     return;
                 }
             }
-            if (step === 2) {
-                if (!locationQuery.trim()) {
-                    showToast({ variant: 'warning', title: 'Required', message: 'Please pin your location on the map or enter your service address.' });
-                    return;
-                }
-            }
             setStep(step + 1);
         } else {
             // Validate service price before submitting
@@ -635,7 +629,9 @@ export default function OnboardingScreen() {
                 </View>
 
                 <View className="mt-4">
-                    <Text className="text-sm font-bold mb-2 ml-1" style={{ color: colors.text }}>{t('service_location_address')}</Text>
+                    <Text className="text-sm font-bold mb-2 ml-1" style={{ color: colors.text }}>
+                        {t('service_location_address')} (optional)
+                    </Text>
                     <View className="rounded-3xl p-3" style={{ backgroundColor: colors.background, borderWidth: 2, borderColor: colors.border }}>
                         <View className="flex-row items-center justify-between px-3 py-2 mb-2" style={{ borderBottomWidth: 1, borderBottomColor: colors.border }}>
                             <Text className="text-[10px] font-bold uppercase tracking-widest" style={{ color: colors.text }}>{t('pinpoint_on_map')}</Text>

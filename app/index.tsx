@@ -88,7 +88,26 @@ function SplashScreen() {
                     await recoverFromAuthStorageError(result.error);
                     router.replace('/(auth)/login');
                 } else if (result?.data?.session) {
-                    router.replace('/(tabs)/dashboard');
+                    const sessionUser = result?.data?.session?.user;
+                    if (!sessionUser?.id) {
+                        router.replace('/(auth)/login');
+                        return;
+                    }
+                    const { data: vendor, error: vendorError } = await supabase
+                        .from('vendors')
+                        .select('id')
+                        .eq('id', sessionUser.id)
+                        .maybeSingle();
+                    if (vendorError) {
+                        await recoverFromAuthStorageError(vendorError);
+                        router.replace('/(auth)/login');
+                        return;
+                    }
+                    if (vendor?.id) {
+                        router.replace('/(tabs)/dashboard');
+                    } else {
+                        router.replace('/onboarding/index');
+                    }
                 } else {
                     router.replace('/(auth)/login');
                 }

@@ -13,7 +13,7 @@ import { ToastProvider } from "../context/ToastContext";
 import { NotificationProvider } from "../context/NotificationContext";
 import { registerForPushNotificationsAsync } from "../lib/notifications";
 import { registerVendorPushToken } from "../lib/vendor-api";
-import { recoverFromAuthStorageError, supabase } from "../lib/supabase";
+import { recoverFromAuthStorageError, resolveSupabaseUser, supabase } from "../lib/supabase";
 import { loadTranslationsFromBackend, refreshTranslations } from "../lib/i18n";
 
 import "../global.css";
@@ -75,16 +75,23 @@ function AppContent() {
     const [vendorId, setVendorId] = useState<string | null>(null);
 
     useEffect(() => {
+        let mounted = true;
+
+        const syncPushToken = async () => {
+            try {
+                const token = await registerForPushNotificationsAsync();
+                if (!token) return;
+                const user = await resolveSupabaseUser();
+                if (!user || !mounted) return;
+                await registerVendorPushToken(token, Platform.OS);
+            } catch (err) {
+                console.warn('Notification registration failed:', err);
+            }
+        };
+
         // Initialize notifications with timeout
         const notificationTimeout = setTimeout(() => {
-            registerForPushNotificationsAsync().then(async (token) => {
-                if (!token) return;
-                const { data: { session } } = await supabase.auth.getSession();
-                if (!session?.access_token) return;
-                await registerVendorPushToken(token, Platform.OS);
-            }).catch((err) => {
-                console.warn('Notification registration failed:', err);
-            });
+            syncPushToken();
         }, 1000); // Delay to not block app startup
 
         // Load translations from backend on app start with timeout
@@ -96,12 +103,9 @@ function AppContent() {
 
         // Get current user/vendor ID with timeout
         const getUserTimeout = setTimeout(() => {
-            supabase.auth.getUser().then(({ data: { user }, error }: { data: { user: any }; error: any }) => {
-                if (error) {
-                    recoverFromAuthStorageError(error).catch(() => {});
-                    return;
-                }
-                if (user) setVendorId(user.id);
+            resolveSupabaseUser().then((user) => {
+                if (!mounted) return;
+                setVendorId(user?.id ?? null);
             }).catch((err: unknown) => {
                 console.warn('Get user failed:', err);
             });
@@ -113,10 +117,7 @@ function AppContent() {
             const authStateResult = supabase.auth.onAuthStateChange((event: any, session: any) => {
                 if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') {
                     if (session?.user) setVendorId(session.user.id);
-                    registerForPushNotificationsAsync().then(async (token) => {
-                        if (!token || !session?.access_token) return;
-                        await registerVendorPushToken(token, Platform.OS);
-                    }).catch(() => {});
+                    syncPushToken().catch(() => {});
                 } else if (event === 'SIGNED_OUT' || event === 'TOKEN_REFRESH_FAILED') {
                     supabase.auth.signOut({ scope: 'local' }).catch(() => {});
                     setVendorId(null);
@@ -138,6 +139,7 @@ function AppContent() {
                 refreshTranslations().catch((err) => {
                     console.warn('Translation refresh failed:', err);
                 });
+                syncPushToken().catch(() => {});
             }
         };
 
@@ -151,6 +153,7 @@ function AppContent() {
         }, 5 * 60 * 1000); // 5 minutes
 
         return () => {
+            mounted = false;
             clearTimeout(notificationTimeout);
             clearTimeout(translationTimeout);
             clearTimeout(getUserTimeout);
